@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
@@ -7,7 +8,6 @@ interface AudioRecorderProps {
   isRecording: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
-  onAudioChunk: (text: string) => void;
   onFullTranscription: (text: string) => void;
   onAudioLevel: (level: number) => void;
   webhookUrl: string;
@@ -18,7 +18,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   isRecording,
   onStartRecording,
   onStopRecording,
-  onAudioChunk,
   onFullTranscription,
   onAudioLevel,
   webhookUrl,
@@ -44,7 +43,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           } 
         });
       } else {
-        // System audio capture via screen sharing
         stream = await navigator.mediaDevices.getDisplayMedia({ 
           audio: {
             echoCancellation: true,
@@ -98,6 +96,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         }
       };
 
+      onStartRecording();
       mediaRecorderRef.current.start();
       
       // Send chunks every 3 seconds
@@ -107,8 +106,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           mediaRecorderRef.current.start();
         }
       }, 3000);
-
-      onStartRecording();
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
@@ -153,8 +150,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const sendAudioToWebhook = async (audioBlob: Blob, retryCount = 0) => {
     if (!webhookUrl) {
-      // Simulate transcription for demo purposes
-      onAudioChunk(`[${mode.toUpperCase()}] Simulated transcription chunk at ${new Date().toLocaleTimeString()}`);
+      onFullTranscription(`[${mode.toUpperCase()}] Simulated transcription at ${new Date().toLocaleTimeString()}`);
       return;
     }
 
@@ -173,20 +169,15 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         method: 'POST',
         body: formData,
         signal: controller.signal,
-        headers: {
-          // Don't set Content-Type, let browser set it with boundary for FormData
-        }
       });
 
       clearTimeout(timeoutId);
 
       console.log('Webhook response status:', response.status);
-      console.log('Webhook response headers:', Object.fromEntries(response.headers.entries()));
 
       if (response.ok) {
         const responseText = await response.text();
         console.log('Raw webhook response:', responseText);
-        console.log('Response length:', responseText.length);
         
         if (!responseText.trim()) {
           console.log('Empty response from webhook, skipping');
@@ -197,50 +188,19 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           const jsonResponse = JSON.parse(responseText);
           console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
           
-          // Handle currentChunk and fullTranscription separately
-          let currentChunk = '';
-          let fullTranscription = '';
-          
-          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
-            currentChunk = jsonResponse.currentChunk.trim();
-            console.log('✅ Found currentChunk:', currentChunk);
-          }
-          
           if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            fullTranscription = jsonResponse.fullTranscription.trim();
+            const fullTranscription = jsonResponse.fullTranscription.trim();
             console.log('✅ Found fullTranscription:', fullTranscription);
-          }
-          
-          // If we have either chunk or full transcription, process them
-          if (currentChunk || fullTranscription) {
-            console.log('✅ Processing transcription data');
             
             toast({
-              title: "Transcription received",
-              description: `Processed ${currentChunk ? currentChunk.length : fullTranscription.length} characters`,
+              title: "Transcription updated",
+              description: `Processed ${fullTranscription.length} characters`,
               duration: 2000
             });
             
-            // Send currentChunk to chunks (for individual chunk display)
-            if (currentChunk) {
-              let displayChunk = currentChunk;
-              if (jsonResponse.chunkCount || jsonResponse.timestamp) {
-                const metadata = [];
-                if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
-                if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
-                displayChunk = `${currentChunk} [${metadata.join(', ')}]`;
-              }
-              onAudioChunk(displayChunk);
-            }
-            
-            // Send fullTranscription separately (for complete transcription display)
-            if (fullTranscription) {
-              onFullTranscription(fullTranscription);
-            }
+            onFullTranscription(fullTranscription);
           } else {
-            console.log('❌ No transcription text found in response');
-            console.log('Available fields:', Object.keys(jsonResponse));
-            onAudioChunk(`[DEBUG] Webhook response received but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
+            console.log('❌ No fullTranscription found in response');
           }
         } catch (parseError) {
           // If not JSON, treat as plain text
@@ -250,16 +210,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             console.log('✅ Using plain text response as transcription');
             
             toast({
-              title: "Transcription received",
+              title: "Transcription updated",
               description: `Processed ${plainText.length} characters`,
               duration: 2000
             });
             
-            onAudioChunk(plainText);
             onFullTranscription(plainText);
-          } else {
-            console.log('❌ Plain text response is empty');
-            onAudioChunk(`[DEBUG] Webhook returned empty plain text response`);
           }
         }
       } else {
@@ -272,8 +228,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000 * (retryCount + 1));
           return;
         }
-        
-        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}${errorText ? ' - ' + errorText : ''}`);
       }
     } catch (error) {
       console.error('Error sending audio to webhook:', error);
@@ -283,19 +237,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         console.log(`Retrying after network error (attempt ${retryCount + 1})`);
         setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000 * (retryCount + 1));
         return;
-      }
-      
-      // Only show fallback after all retries failed
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond (>15s)`);
-        } else if (error.message.includes('Failed to fetch')) {
-          onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL and CORS settings`);
-        } else {
-          onAudioChunk(`[${mode.toUpperCase()}] Connection error: ${error.message}`);
-        }
-      } else {
-        onAudioChunk(`[${mode.toUpperCase()}] Unknown error occurred`);
       }
     }
   };
