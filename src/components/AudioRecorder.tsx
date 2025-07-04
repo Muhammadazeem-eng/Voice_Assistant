@@ -25,11 +25,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
   const [showSystemAudioInfo, setShowSystemAudioInfo] = useState(false);
+  const [isVoiceDetected, setIsVoiceDetected] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
+  const voiceActivityRef = useRef<boolean>(false);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout>();
+
+  // Voice activity detection parameters
+  const VOICE_THRESHOLD = 0.01; // Minimum amplitude for voice detection
+  const SILENCE_DURATION = 2000; // 2 seconds of silence before stopping
+  const MIN_VOICE_DURATION = 500; // Minimum voice duration to consider valid
+
+  const detectVoiceActivity = (audioData: Float32Array): boolean => {
+    // Calculate RMS (Root Mean Square) for voice activity detection
+    let sum = 0;
+    for (let i = 0; i < audioData.length; i++) {
+      sum += audioData[i] * audioData[i];
+    }
+    const rms = Math.sqrt(sum / audioData.length);
+    
+    // Check if RMS exceeds voice threshold
+    return rms > VOICE_THRESHOLD;
+  };
 
   const startRecording = async () => {
     try {
@@ -40,7 +60,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            sampleRate: 16000
+            autoGainControl: true,
+            sampleRate: 16000,
+            channelCount: 1
           } 
         });
       } else {
@@ -101,21 +123,55 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       streamRef.current = stream;
       setHasPermission(true);
 
-      // Set up audio analysis for level visualization
+      // Set up audio analysis for level visualization and voice detection
       audioContextRef.current = new AudioContext();
       analyserRef.current = audioContextRef.current.createAnalyser();
       const source = audioContextRef.current.createMediaStreamSource(stream);
       source.connect(analyserRef.current);
       
-      analyserRef.current.fftSize = 256;
-      const bufferLength = analyserRef.current.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
+      analyserRef.current.fftSize = 2048;
+      analyserRef.current.smoothingTimeConstant = 0.8;
+      const bufferLength = analyserRef.current.fftSize;
+      const dataArray = new Float32Array(bufferLength);
+      const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount);
 
       const updateAudioLevel = () => {
         if (analyserRef.current && isRecording) {
-          analyserRef.current.getByteFrequencyData(dataArray);
-          const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+          // Get time domain data for voice activity detection
+          analyserRef.current.getFloatTimeDomainData(dataArray);
+          
+          // Get frequency data for level visualization
+          analyserRef.current.getByteFrequencyData(frequencyData);
+          const average = frequencyData.reduce((a, b) => a + b) / frequencyData.length;
           onAudioLevel((average / 255) * 100);
+
+          // Voice activity detection
+          const hasVoice = detectVoiceActivity(dataArray);
+          
+          if (hasVoice) {
+            if (!voiceActivityRef.current) {
+              console.log('🎤 Voice detected, starting transcription');
+              voiceActivityRef.current = true;
+              setIsVoiceDetected(true);
+            }
+            
+            // Clear silence timeout when voice is detected
+            if (silenceTimeoutRef.current) {
+              clearTimeout(silenceTimeoutRef.current);
+              silenceTimeoutRef.current = undefined;
+            }
+          } else {
+            // Start silence timer if voice was previously detected
+            if (voiceActivityRef.current && !silenceTimeoutRef.current) {
+              silenceTimeoutRef.current = setTimeout(() => {
+                console.log('🔇 Silence detected, pausing transcription');
+                voiceActivityRef.current = false;
+                setIsVoiceDetected(false);
+                silenceTimeoutRef.current = undefined;
+              }, SILENCE_DURATION);
+            }
+          }
+          
           requestAnimationFrame(updateAudioLevel);
         }
       };
@@ -129,8 +185,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       const audioChunks: Blob[] = [];
       
       mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data.size > 0 && voiceActivityRef.current) {
+          // Only process chunks when voice activity is detected
           audioChunks.push(event.data);
+          console.log('📊 Audio chunk captured with voice activity');
         }
       };
 
@@ -144,7 +202,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       onStartRecording();
       mediaRecorderRef.current.start();
       
-      // Send chunks every 3 seconds
+      // Send chunks every 3 seconds, but only process if voice is detected
       chunkIntervalRef.current = setInterval(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
           mediaRecorderRef.current.stop();
@@ -154,7 +212,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
-        description: "Audio is being processed in real-time"
+        description: "Listening for voice activity..."
       });
 
     } catch (error) {
@@ -175,6 +233,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     if (chunkIntervalRef.current) {
       clearInterval(chunkIntervalRef.current);
     }
+
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+    }
     
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -184,6 +246,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       audioContextRef.current.close();
     }
 
+    voiceActivityRef.current = false;
+    setIsVoiceDetected(false);
     onStopRecording();
     onAudioLevel(0);
     
@@ -237,13 +301,16 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             const fullTranscription = jsonResponse.fullTranscription.trim();
             console.log('✅ Found fullTranscription:', fullTranscription);
             
-            toast({
-              title: "Transcription updated",
-              description: `Processed ${fullTranscription.length} characters`,
-              duration: 2000
-            });
-            
-            onFullTranscription(fullTranscription);
+            // Only update transcription if it contains meaningful content
+            if (fullTranscription.length > 10) { // Filter out very short responses
+              toast({
+                title: "Transcription updated",
+                description: `Processed ${fullTranscription.length} characters`,
+                duration: 2000
+              });
+              
+              onFullTranscription(fullTranscription);
+            }
           } else {
             console.log('❌ No fullTranscription found in response');
           }
@@ -251,7 +318,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           // If not JSON, treat as plain text
           console.log('Response is not JSON, treating as plain text:', responseText);
           const plainText = responseText.trim();
-          if (plainText) {
+          if (plainText && plainText.length > 10) {
             console.log('✅ Using plain text response as transcription');
             
             toast({
@@ -316,6 +383,16 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         <Icon className="w-6 h-6 mr-2" />
         {isRecording ? `Stop ${label}` : `Start ${label}`}
       </Button>
+      
+      {/* Voice activity indicator */}
+      {isRecording && mode === 'microphone' && (
+        <div className="flex items-center gap-2 text-xs">
+          <div className={`w-2 h-2 rounded-full ${isVoiceDetected ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></div>
+          <span className="text-slate-400">
+            {isVoiceDetected ? 'Voice detected' : 'Waiting for voice...'}
+          </span>
+        </div>
+      )}
       
       <div className="text-center">
         <div className="flex items-center justify-center gap-2">
