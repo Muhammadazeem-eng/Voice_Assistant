@@ -31,6 +31,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunkingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isChunkingRef = useRef<boolean>(false);
 
   // Function to get supported audio format - prefer webm for recording
   const getSupportedMimeType = () => {
@@ -134,6 +135,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const startRecording = async () => {
     try {
+      console.log(`🎙️ Starting ${mode} recording...`);
       let stream: MediaStream;
       
       if (mode === 'microphone') {
@@ -158,6 +160,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       streamRef.current = stream;
       setHasPermission(true);
+      console.log(`✅ ${mode} stream acquired successfully`);
 
       // Set up audio analysis for level visualization
       audioContextRef.current = new AudioContext();
@@ -180,6 +183,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       updateAudioLevel();
 
       // Start continuous chunking
+      console.log('🔄 Starting continuous chunking...');
       startContinuousChunking(stream);
 
       onStartRecording();
@@ -190,7 +194,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       });
 
     } catch (error) {
-      console.error('Error starting recording:', error);
+      console.error('❌ Error starting recording:', error);
       toast({
         title: "Recording failed",
         description: `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`,
@@ -201,9 +205,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const startContinuousChunking = (stream: MediaStream) => {
     const mimeType = getSupportedMimeType();
+    console.log(`📦 Starting chunking with MIME type: ${mimeType}`);
+    isChunkingRef.current = true;
     
     const createChunk = () => {
-      if (!isRecording || !streamRef.current) {
+      console.log(`🎯 Creating new chunk... Recording: ${isRecording}, Chunking: ${isChunkingRef.current}`);
+      
+      if (!isRecording || !streamRef.current || !isChunkingRef.current) {
+        console.log('⏹️ Stopping chunking - conditions not met');
         return;
       }
 
@@ -213,14 +222,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       });
 
       const audioChunks: Blob[] = [];
+      console.log('🎙️ MediaRecorder created, starting recording...');
 
       mediaRecorder.ondataavailable = (event) => {
+        console.log(`📊 Data available: ${event.data.size} bytes`);
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
+        console.log(`⏹️ MediaRecorder stopped. Chunks: ${audioChunks.length}`);
         if (audioChunks.length > 0) {
           const audioBlob = new Blob(audioChunks, { type: mimeType });
           console.log(`📦 Raw audio chunk: ${audioBlob.size} bytes (${mimeType})`);
@@ -230,35 +242,56 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           console.log(`🎯 Sending WAV chunk: ${wavBlob.size} bytes`);
           
           await sendAudioToWebhook(wavBlob);
+        } else {
+          console.log('⚠️ No audio chunks to process');
         }
         
         // Start next chunk if still recording
-        if (isRecording && streamRef.current) {
+        if (isRecording && streamRef.current && isChunkingRef.current) {
+          console.log('🔄 Scheduling next chunk in 100ms...');
           setTimeout(createChunk, 100); // Small delay to prevent overlap
+        } else {
+          console.log('🛑 Not scheduling next chunk - recording stopped or chunking disabled');
         }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error('❌ MediaRecorder error:', event);
       };
 
       // Record for 2.5 seconds
       mediaRecorder.start();
+      console.log('▶️ MediaRecorder started, will stop in 2500ms');
+      
       setTimeout(() => {
         if (mediaRecorder.state === 'recording') {
+          console.log('⏸️ Stopping MediaRecorder after 2.5 seconds');
           mediaRecorder.stop();
+        } else {
+          console.log(`⚠️ MediaRecorder not in recording state: ${mediaRecorder.state}`);
         }
       }, 2500);
     };
 
     // Start first chunk
+    console.log('🚀 Starting first chunk');
     createChunk();
   };
 
   const stopRecording = () => {
+    console.log('🛑 Stopping recording...');
+    isChunkingRef.current = false;
+    
     if (chunkingIntervalRef.current) {
       clearInterval(chunkingIntervalRef.current);
       chunkingIntervalRef.current = null;
     }
     
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        console.log(`🔇 Stopping track: ${track.kind}`);
+        track.stop();
+      });
     }
     
     if (audioContextRef.current) {
@@ -275,7 +308,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   };
 
   const sendAudioToWebhook = async (audioBlob: Blob, retryCount = 0) => {
+    console.log(`🚀 sendAudioToWebhook called - Webhook URL: ${webhookUrl ? 'Set' : 'Not set'}`);
+    console.log(`📊 Audio blob size: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
+    
     if (!webhookUrl) {
+      console.log('⚠️ No webhook URL provided, using simulated response');
       onAudioChunk(`[${mode.toUpperCase()}] Simulated chunk at ${new Date().toLocaleTimeString()}`);
       return;
     }
@@ -285,13 +322,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('audio', audioBlob, `audio.${audioBlob.type.includes('wav') ? 'wav' : 'webm'}`);
       formData.append('source', mode);
 
-      console.log('🚀 Sending audio chunk to webhook:', webhookUrl);
+      console.log('🌐 Sending audio chunk to webhook:', webhookUrl);
       console.log('📊 Chunk size:', audioBlob.size, 'bytes');
       console.log('🎵 Audio format:', audioBlob.type);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => {
+        console.log('⏰ Request timeout after 15 seconds');
+        controller.abort();
+      }, 15000);
 
+      console.log('📡 Making fetch request...');
       const response = await fetch(webhookUrl, {
         method: 'POST',
         body: formData,
@@ -299,8 +340,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       });
 
       clearTimeout(timeoutId);
-
       console.log('📡 Webhook response status:', response.status);
+      console.log('📡 Webhook response headers:', Object.fromEntries(response.headers.entries()));
 
       if (response.ok) {
         const responseText = await response.text();
@@ -341,6 +382,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             onAudioChunk(`[DEBUG] No transcription in response: ${Object.keys(data).join(', ')}`);
           }
         } catch (parseError) {
+          console.log('⚠️ JSON parse failed, trying plain text response');
           const plainText = responseText.trim();
           if (plainText) {
             console.log('📝 Using plain text response:', plainText);
