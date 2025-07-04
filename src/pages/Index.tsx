@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,12 +21,6 @@ const Index = () => {
     openaiApiKey: localStorage.getItem('openai_api_key') || '',
     webhookUrl: localStorage.getItem('webhook_url') || ''
   });
-  
-  const [transcriptionChunks, setTranscriptionChunks] = useState<Array<{
-    id: string;
-    text: string;
-    timestamp: Date;
-  }>>([]);
   
   const [fullTranscription, setFullTranscription] = useState<string>('');
   
@@ -68,15 +63,6 @@ const Index = () => {
     localStorage.setItem(key === 'openaiApiKey' ? 'openai_api_key' : 'webhook_url', value);
   };
 
-  const addTranscriptionChunk = (text: string) => {
-    const chunk = {
-      id: Date.now().toString(),
-      text,
-      timestamp: new Date()
-    };
-    setTranscriptionChunks(prev => [...prev, chunk]);
-  };
-
   const updateFullTranscription = (text: string) => {
     setFullTranscription(text);
   };
@@ -92,7 +78,6 @@ const Index = () => {
   };
 
   const clearTranscription = () => {
-    setTranscriptionChunks([]);
     setFullTranscription('');
     toast({
       title: "Transcription cleared",
@@ -101,8 +86,7 @@ const Index = () => {
   };
 
   const copyTranscription = () => {
-    const textToCopy = fullTranscription || transcriptionChunks.map(chunk => chunk.text).join(' ');
-    navigator.clipboard.writeText(textToCopy);
+    navigator.clipboard.writeText(fullTranscription);
     toast({
       title: "Copied to clipboard",
       description: "Full transcription has been copied."
@@ -163,7 +147,6 @@ const Index = () => {
                   setIsRecording(false);
                   setRecordingMode(null);
                 }}
-                onAudioChunk={addTranscriptionChunk}
                 onFullTranscription={updateFullTranscription}
                 onAudioLevel={setAudioLevel}
                 webhookUrl={config.webhookUrl}
@@ -180,7 +163,6 @@ const Index = () => {
                   setIsRecording(false);
                   setRecordingMode(null);
                 }}
-                onAudioChunk={addTranscriptionChunk}
                 onFullTranscription={updateFullTranscription}
                 onAudioLevel={setAudioLevel}
                 webhookUrl={config.webhookUrl}
@@ -188,7 +170,7 @@ const Index = () => {
               />
 
               <FileUpload
-                onFileProcessed={addTranscriptionChunk}
+                onFileProcessed={() => {}}
                 webhookUrl={config.webhookUrl}
               />
             </div>
@@ -216,13 +198,13 @@ const Index = () => {
           {/* Transcription Column */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-slate-50">Live Transcription</h2>
+              <h2 className="text-xl font-semibold text-slate-50">Transcription</h2>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={copyTranscription}
-                  disabled={!fullTranscription && transcriptionChunks.length === 0}
+                  disabled={!fullTranscription}
                   className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Copy className="w-4 h-4 mr-2" />
@@ -232,7 +214,7 @@ const Index = () => {
                   variant="outline"
                   size="sm"
                   onClick={clearTranscription}
-                  disabled={!fullTranscription && transcriptionChunks.length === 0}
+                  disabled={!fullTranscription}
                   className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
@@ -242,7 +224,6 @@ const Index = () => {
             </div>
             
             <TranscriptionDisplay
-              chunks={transcriptionChunks}
               fullTranscription={fullTranscription}
               isRecording={isRecording}
             />
@@ -255,7 +236,7 @@ const Index = () => {
               messages={chatMessages}
               onSendMessage={addChatMessage}
               apiKey={config.openaiApiKey}
-              transcriptionText={fullTranscription || transcriptionChunks.map(chunk => chunk.text).join(' ')}
+              transcriptionText={fullTranscription}
             />
           </div>
         </div>

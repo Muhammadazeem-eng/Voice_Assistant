@@ -8,7 +8,6 @@ interface AudioRecorderProps {
   isRecording: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
-  onAudioChunk: (text: string) => void;
   onFullTranscription: (text: string) => void;
   onAudioLevel: (level: number) => void;
   webhookUrl: string;
@@ -19,7 +18,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   isRecording,
   onStartRecording,
   onStopRecording,
-  onAudioChunk,
   onFullTranscription,
   onAudioLevel,
   webhookUrl,
@@ -27,13 +25,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
   const [showSystemAudioInstructions, setShowSystemAudioInstructions] = useState(false);
-  const [chunkCount, setChunkCount] = useState(0);
+  const [processedChunks, setProcessedChunks] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const accumulatedTranscriptionRef = useRef<string>('');
-  const chunkIntervalRef = useRef<NodeJS.Timeout>();
   const isActivelyRecordingRef = useRef<boolean>(false);
 
   // Get the most compatible MIME type
@@ -63,7 +60,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       // Reset state
       accumulatedTranscriptionRef.current = '';
-      setChunkCount(0);
+      setProcessedChunks(0);
       isActivelyRecordingRef.current = true;
       
       let stream: MediaStream;
@@ -172,7 +169,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Start continuous chunking with proper state management
+      // Start continuous chunking with simplified logic
       const startChunking = () => {
         console.log('🔄 Starting continuous chunking every 3 seconds');
         
@@ -196,8 +193,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
               return;
             }
 
-            const currentChunkNumber = chunkCount + 1;
-            setChunkCount(currentChunkNumber);
+            const currentChunkNumber = processedChunks + 1;
+            setProcessedChunks(currentChunkNumber);
             
             console.log(`🔄 Processing chunk #${currentChunkNumber}`);
             
@@ -289,10 +286,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       mediaRecorderRef.current.stop();
     }
     
-    if (chunkIntervalRef.current) {
-      clearInterval(chunkIntervalRef.current);
-    }
-    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         console.log('⏹️ Stopping track:', track.kind);
@@ -305,20 +298,19 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     }
 
     setShowSystemAudioInstructions(false);
-    setChunkCount(0);
+    setProcessedChunks(0);
     onStopRecording();
     onAudioLevel(0);
     
     toast({
       title: "Recording stopped",
-      description: `Processed ${chunkCount} chunks total`
+      description: `Processed ${processedChunks} chunks total`
     });
   };
 
   const sendAudioToWebhook = async (audioBlob: Blob, chunkNumber: number, retryCount = 0) => {
     if (!webhookUrl) {
-      const simulatedText = `Simulated chunk ${chunkNumber} text`;
-      onAudioChunk(simulatedText);
+      const simulatedText = `Simulated transcription chunk ${chunkNumber}`;
       accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + simulatedText;
       onFullTranscription(accumulatedTranscriptionRef.current);
       return;
@@ -331,7 +323,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('chunkNumber', chunkNumber.toString());
 
       console.log(`📡 Sending chunk #${chunkNumber} to webhook:`, webhookUrl);
-      console.log(`📊 Audio blob size: ${audioBlob.size} bytes`);
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -344,15 +335,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       clearTimeout(timeoutId);
 
-      console.log(`📥 Webhook response for chunk #${chunkNumber}:`, response.status);
-
       if (response.ok) {
         const responseText = await response.text();
         console.log(`📄 Raw response for chunk #${chunkNumber}:`, responseText || '[EMPTY]');
         
         if (!responseText.trim()) {
           console.log(`⚠️ Empty response for chunk #${chunkNumber}, continuing...`);
-          onAudioChunk(`[CHUNK ${chunkNumber}] Processing... (empty response)`);
           return;
         }
         
@@ -360,84 +348,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           const jsonResponse = JSON.parse(responseText);
           console.log(`✅ Parsed JSON for chunk #${chunkNumber}:`, JSON.stringify(jsonResponse, null, 2));
           
-          let currentChunk = '';
-          let fullTranscription = '';
-          
-          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
-            currentChunk = jsonResponse.currentChunk.trim();
-            console.log(`✅ Found currentChunk #${chunkNumber}:`, currentChunk);
-          }
-          
+          // Only use fullTranscription from webhook response
           if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            fullTranscription = jsonResponse.fullTranscription.trim();
+            const fullTranscription = jsonResponse.fullTranscription.trim();
             console.log(`✅ Found fullTranscription #${chunkNumber}:`, fullTranscription);
-          }
-          
-          if (currentChunk || fullTranscription) {
-            console.log(`🔄 Processing transcription for chunk #${chunkNumber}`);
             
-            // Pass the current chunk for display in Latest Chunk section
-            if (currentChunk) {
-              onAudioChunk(currentChunk);
-            }
-            
-            // Handle full transcription accumulation
-            if (fullTranscription) {
-              // Use the full transcription from webhook if provided
-              accumulatedTranscriptionRef.current = fullTranscription;
-              onFullTranscription(fullTranscription);
-            } else if (currentChunk) {
-              // If only currentChunk is provided, accumulate it
-              // Check if this chunk is already included to avoid duplicates
-              const currentAccumulated = accumulatedTranscriptionRef.current.toLowerCase();
-              const newChunkLower = currentChunk.toLowerCase();
-              
-              if (!currentAccumulated.includes(newChunkLower)) {
-                accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + currentChunk;
-                onFullTranscription(accumulatedTranscriptionRef.current);
-                console.log(`📝 Accumulated transcription: "${accumulatedTranscriptionRef.current}"`);
-              } else {
-                console.log(`⚠️ Chunk #${chunkNumber} already exists in transcription, skipping append`);
-                // Still update the UI with current accumulated text
-                onFullTranscription(accumulatedTranscriptionRef.current);
-              }
-            }
+            accumulatedTranscriptionRef.current = fullTranscription;
+            onFullTranscription(fullTranscription);
             
             toast({
-              title: `Live transcription - Chunk ${chunkNumber}`,
-              description: `${currentChunk ? currentChunk.substring(0, 50) : fullTranscription.substring(0, 50)}${(currentChunk || fullTranscription).length > 50 ? '...' : ''}`,
+              title: `Live transcription updated`,
+              description: `Chunk ${chunkNumber} processed`,
               duration: 2000
             });
-            
-          } else {
-            console.log(`❌ No transcription text found in chunk #${chunkNumber}`);
-            onAudioChunk(`[CHUNK ${chunkNumber}] No transcription text found`);
           }
         } catch (parseError) {
-          console.log(`📝 Plain text response for chunk #${chunkNumber}:`, responseText);
+          // Handle plain text response
           const plainText = responseText.trim();
           if (plainText) {
             console.log(`✅ Using plain text for chunk #${chunkNumber}`);
-            
-            // For plain text responses, treat as currentChunk and accumulate
-            onAudioChunk(plainText);
-            
-            // Check for duplicates before accumulating
-            const currentAccumulated = accumulatedTranscriptionRef.current.toLowerCase();
-            const newTextLower = plainText.toLowerCase();
-            
-            if (!currentAccumulated.includes(newTextLower)) {
-              accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + plainText;
-              console.log(`📝 Accumulated transcription: "${accumulatedTranscriptionRef.current}"`);
-            } else {
-              console.log(`⚠️ Plain text chunk #${chunkNumber} already exists, skipping append`);
-            }
-            
-            onFullTranscription(accumulatedTranscriptionRef.current);
+            accumulatedTranscriptionRef.current = plainText;
+            onFullTranscription(plainText);
             
             toast({
-              title: `Live transcription - Chunk ${chunkNumber}`,
-              description: plainText.substring(0, 50) + (plainText.length > 50 ? '...' : ''),
+              title: `Live transcription updated`,
+              description: `Chunk ${chunkNumber} processed`,
               duration: 2000
             });
           }
@@ -451,8 +386,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           setTimeout(() => sendAudioToWebhook(audioBlob, chunkNumber, retryCount + 1), 1000 * (retryCount + 1));
           return;
         }
-        
-        onAudioChunk(`[CHUNK ${chunkNumber} ERROR] Webhook returned ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
       console.error(`❌ Error sending chunk #${chunkNumber}:`, error);
@@ -461,16 +394,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         console.log(`🔄 Retrying chunk #${chunkNumber} after network error (attempt ${retryCount + 1})`);
         setTimeout(() => sendAudioToWebhook(audioBlob, chunkNumber, retryCount + 1), 2000 * (retryCount + 1));
         return;
-      }
-      
-      if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          onAudioChunk(`[CHUNK ${chunkNumber}] Request timeout - webhook took too long`);
-        } else if (error.message.includes('Failed to fetch')) {
-          onAudioChunk(`[CHUNK ${chunkNumber}] Network error - check webhook URL and CORS`);
-        } else {
-          onAudioChunk(`[CHUNK ${chunkNumber}] Connection error: ${error.message}`);
-        }
       }
     }
   };
@@ -527,7 +450,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           {isRecording && (
             <div className="space-y-1">
               <p className="text-xs text-green-400 animate-pulse">● Live transcription active</p>
-              <p className="text-xs text-slate-500">Processed {chunkCount} chunks</p>
+              <p className="text-xs text-slate-500">Processed {processedChunks} chunks</p>
             </div>
           )}
         </div>
