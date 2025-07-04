@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
@@ -322,7 +321,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const sendAudioToWebhook = async (audioBlob: Blob, chunkNumber: number, retryCount = 0) => {
     if (!webhookUrl) {
-      const simulatedText = `[${mode.toUpperCase()}] Chunk ${chunkNumber} - Simulated transcription at ${new Date().toLocaleTimeString()}`;
+      const simulatedText = `Simulated chunk ${chunkNumber} text`;
       onAudioChunk(simulatedText);
       accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + simulatedText;
       onFullTranscription(accumulatedTranscriptionRef.current);
@@ -381,20 +380,19 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           if (currentChunk || fullTranscription) {
             console.log(`🔄 Processing transcription for chunk #${chunkNumber}`);
             
+            // Use currentChunk for the chunk display (new text only)
             if (currentChunk) {
-              if (!accumulatedTranscriptionRef.current.includes(currentChunk)) {
-                accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + currentChunk;
-              }
-              
-              const displayChunk = `[CHUNK ${chunkNumber}] ${currentChunk}`;
-              onAudioChunk(displayChunk);
-              
-              onFullTranscription(accumulatedTranscriptionRef.current);
+              onAudioChunk(currentChunk); // Pass only the new chunk text
             }
             
+            // Use fullTranscription for the complete transcription display
             if (fullTranscription) {
               accumulatedTranscriptionRef.current = fullTranscription;
               onFullTranscription(fullTranscription);
+            } else if (currentChunk) {
+              // If no fullTranscription provided, build it incrementally
+              accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + currentChunk;
+              onFullTranscription(accumulatedTranscriptionRef.current);
             }
             
             toast({
@@ -413,9 +411,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           if (plainText) {
             console.log(`✅ Using plain text for chunk #${chunkNumber}`);
             
+            // For plain text responses, treat as currentChunk
+            onAudioChunk(plainText);
             accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + plainText;
-            
-            onAudioChunk(`[CHUNK ${chunkNumber}] ${plainText}`);
             onFullTranscription(accumulatedTranscriptionRef.current);
             
             toast({
@@ -442,7 +440,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       if (retryCount < 2) {
         console.log(`🔄 Retrying chunk #${chunkNumber} after network error (attempt ${retryCount + 1})`);
-        setTimeout(() => sendAudioToWebhunk(audioBlob, chunkNumber, retryCount + 1), 2000 * (retryCount + 1));
+        setTimeout(() => sendAudioToWebhook(audioBlob, chunkNumber, retryCount + 1), 2000 * (retryCount + 1));
         return;
       }
       
