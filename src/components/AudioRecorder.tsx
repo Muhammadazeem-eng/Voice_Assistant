@@ -35,7 +35,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const accumulatedTranscriptionRef = useRef<string>('');
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
-  const isProcessingRef = useRef<boolean>(false);
+  const isActivelyRecordingRef = useRef<boolean>(false);
 
   // Get the most compatible MIME type
   const getSupportedMimeType = () => {
@@ -65,7 +65,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       // Reset state
       accumulatedTranscriptionRef.current = '';
       setChunkCount(0);
-      isProcessingRef.current = false;
+      isActivelyRecordingRef.current = true;
       
       let stream: MediaStream;
       
@@ -142,7 +142,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         const dataArray = new Uint8Array(bufferLength);
 
         const updateAudioLevel = () => {
-          if (analyserRef.current && isRecording) {
+          if (analyserRef.current && isActivelyRecordingRef.current) {
             analyserRef.current.getByteFrequencyData(dataArray);
             const average = dataArray.reduce((a, b) => a + b) / bufferLength;
             onAudioLevel((average / 255) * 100);
@@ -173,69 +173,73 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Set up continuous chunking logic
-      const startContinuousChunking = () => {
+      // Start continuous chunking with proper state management
+      const startChunking = () => {
         console.log('🔄 Starting continuous chunking every 3 seconds');
         
-        const processChunk = async () => {
-          if (!mediaRecorderRef.current || !streamRef.current || !isRecording) {
-            console.log('⚠️ Recording stopped, ending chunk processing');
+        const recordChunk = () => {
+          if (!isActivelyRecordingRef.current || !mediaRecorderRef.current || !streamRef.current?.active) {
+            console.log('⚠️ Recording stopped or stream inactive, ending chunk processing');
             return;
           }
 
-          if (mediaRecorderRef.current.state === 'inactive') {
-            console.log('📹 Starting new recording chunk');
+          console.log('📹 Starting new recording chunk');
+          
+          // Set up data handler for this chunk
+          mediaRecorderRef.current.ondataavailable = async (event) => {
+            console.log(`📦 Chunk data available, size: ${event.data.size} bytes`);
             
-            // Set up data handler for this chunk
-            mediaRecorderRef.current.ondataavailable = async (event) => {
-              console.log(`📦 Chunk data available, size: ${event.data.size} bytes`);
-              
-              if (event.data.size === 0) {
-                console.warn('⚠️ Received empty chunk, skipping...');
-                return;
+            if (event.data.size === 0) {
+              console.warn('⚠️ Received empty chunk, skipping...');
+              // Still continue to next chunk even if this one is empty
+              if (isActivelyRecordingRef.current) {
+                setTimeout(recordChunk, 100);
               }
+              return;
+            }
 
-              if (!isProcessingRef.current) {
-                isProcessingRef.current = true;
-                const currentChunkNumber = chunkCount + 1;
-                setChunkCount(currentChunkNumber);
-                
-                console.log(`🔄 Processing chunk #${currentChunkNumber}`);
-                
-                try {
-                  await sendAudioToWebhook(event.data, currentChunkNumber);
-                } catch (error) {
-                  console.error(`❌ Failed to process chunk #${currentChunkNumber}:`, error);
-                } finally {
-                  isProcessingRef.current = false;
-                }
-              }
-            };
+            const currentChunkNumber = chunkCount + 1;
+            setChunkCount(currentChunkNumber);
+            
+            console.log(`🔄 Processing chunk #${currentChunkNumber}`);
+            
+            try {
+              await sendAudioToWebhook(event.data, currentChunkNumber);
+            } catch (error) {
+              console.error(`❌ Failed to process chunk #${currentChunkNumber}:`, error);
+            }
+            
+            // Schedule next chunk if still recording
+            if (isActivelyRecordingRef.current) {
+              setTimeout(recordChunk, 100);
+            }
+          };
 
-            // Start recording for 3 seconds
+          // Start recording for 3 seconds
+          try {
             mediaRecorderRef.current.start();
             
-            // Stop after 3 seconds and schedule next chunk
+            // Stop after 3 seconds
             setTimeout(() => {
               if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                 console.log('⏹️ Stopping current chunk');
                 mediaRecorderRef.current.stop();
-                
-                // Schedule next chunk if still recording
-                if (isRecording && streamRef.current && streamRef.current.active) {
-                  setTimeout(processChunk, 100); // Small delay to ensure clean state transition
-                }
               }
             }, 3000);
+          } catch (error) {
+            console.error('❌ Error starting MediaRecorder:', error);
+            if (isActivelyRecordingRef.current) {
+              setTimeout(recordChunk, 1000); // Retry after 1 second
+            }
           }
         };
 
         // Start the first chunk
-        processChunk();
+        recordChunk();
       };
 
       // Start continuous chunking
-      startContinuousChunking();
+      startChunking();
 
       onStartRecording();
       
@@ -247,6 +251,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     } catch (error) {
       console.error('❌ Error starting recording:', error);
       setShowSystemAudioInstructions(false);
+      isActivelyRecordingRef.current = false;
       
       let errorMessage = `Unable to start ${mode === 'microphone' ? 'microphone' : 'system audio'} recording.`;
       
@@ -283,6 +288,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const stopRecording = () => {
     console.log('🛑 Stopping recording...');
     
+    isActivelyRecordingRef.current = false;
+    
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
@@ -317,6 +324,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     if (!webhookUrl) {
       const simulatedText = `[${mode.toUpperCase()}] Chunk ${chunkNumber} - Simulated transcription at ${new Date().toLocaleTimeString()}`;
       onAudioChunk(simulatedText);
+      accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + simulatedText;
+      onFullTranscription(accumulatedTranscriptionRef.current);
       return;
     }
 
@@ -433,7 +442,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       if (retryCount < 2) {
         console.log(`🔄 Retrying chunk #${chunkNumber} after network error (attempt ${retryCount + 1})`);
-        setTimeout(() => sendAudioToWebhook(audioBlob, chunkNumber, retryCount + 1), 2000 * (retryCount + 1));
+        setTimeout(() => sendAudioToWebhunk(audioBlob, chunkNumber, retryCount + 1), 2000 * (retryCount + 1));
         return;
       }
       
