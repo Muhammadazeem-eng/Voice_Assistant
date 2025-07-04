@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
@@ -163,21 +162,29 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('source', mode);
 
       console.log('Sending audio to webhook:', webhookUrl);
+      console.log('Audio blob size:', audioBlob.size, 'bytes');
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
 
       const response = await fetch(webhookUrl, {
         method: 'POST',
         body: formData,
-        signal: controller.signal
+        signal: controller.signal,
+        headers: {
+          // Don't set Content-Type, let browser set it with boundary for FormData
+        }
       });
 
       clearTimeout(timeoutId);
 
+      console.log('Webhook response status:', response.status);
+      console.log('Webhook response headers:', Object.fromEntries(response.headers.entries()));
+
       if (response.ok) {
         const responseText = await response.text();
-        console.log('Webhook response:', responseText);
+        console.log('Raw webhook response:', responseText);
+        console.log('Response length:', responseText.length);
         
         // Skip empty responses
         if (!responseText.trim()) {
@@ -188,14 +195,16 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         // Try to parse as JSON first
         try {
           const jsonResponse = JSON.parse(responseText);
-          console.log('Parsed JSON response:', jsonResponse);
+          console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
           
-          // Skip generic status messages
+          // Skip generic status messages that don't contain transcription
           const genericMessages = [
             'workflow was started',
-            'request received',
+            'request received', 
             'processing',
-            'accepted'
+            'accepted',
+            'success',
+            'ok'
           ];
           
           if (jsonResponse.message && 
@@ -206,47 +215,80 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             return;
           }
           
-          // Extract transcription text from various possible JSON structures
+          // Look for transcription text in various possible JSON fields
           let transcriptionText = '';
           
-          if (jsonResponse.transcription) {
-            transcriptionText = jsonResponse.transcription;
-          } else if (jsonResponse.text) {
-            transcriptionText = jsonResponse.text;
-          } else if (jsonResponse.result) {
-            transcriptionText = jsonResponse.result;
-          } else if (jsonResponse.data) {
-            transcriptionText = jsonResponse.data;
-          } else if (jsonResponse.content) {
-            transcriptionText = jsonResponse.content;
-          } else if (jsonResponse.message) {
+          // Check common transcription field names
+          const transcriptionFields = [
+            'transcription',
+            'transcript', 
+            'text',
+            'result',
+            'output',
+            'content',
+            'data',
+            'response'
+          ];
+          
+          for (const field of transcriptionFields) {
+            if (jsonResponse[field] && typeof jsonResponse[field] === 'string') {
+              transcriptionText = jsonResponse[field];
+              console.log(`Found transcription in field '${field}':`, transcriptionText);
+              break;
+            }
+          }
+          
+          // If no transcription found in dedicated fields, check message field
+          if (!transcriptionText && jsonResponse.message && 
+              !genericMessages.some(msg => 
+                jsonResponse.message.toLowerCase().includes(msg.toLowerCase())
+              )) {
             transcriptionText = jsonResponse.message;
+            console.log('Using message field as transcription:', transcriptionText);
+          }
+          
+          // Check for nested objects
+          if (!transcriptionText && jsonResponse.data && typeof jsonResponse.data === 'object') {
+            for (const field of transcriptionFields) {
+              if (jsonResponse.data[field] && typeof jsonResponse.data[field] === 'string') {
+                transcriptionText = jsonResponse.data[field];
+                console.log(`Found transcription in nested data.${field}:`, transcriptionText);
+                break;
+              }
+            }
           }
           
           if (transcriptionText && transcriptionText.trim() && transcriptionText.length > 2) {
-            console.log('Extracted transcription:', transcriptionText);
+            console.log('✅ Extracted transcription text:', transcriptionText);
             onAudioChunk(transcriptionText);
           } else {
-            console.log('No meaningful transcription found in JSON response');
+            console.log('❌ No meaningful transcription found in JSON response');
+            console.log('Available fields:', Object.keys(jsonResponse));
+            onAudioChunk(`[DEBUG] Webhook returned JSON but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
           }
         } catch (parseError) {
           // If not JSON, treat as plain text
           console.log('Response is not JSON, treating as plain text:', responseText);
           if (responseText.trim() && responseText.length > 2) {
+            console.log('✅ Using plain text response as transcription');
             onAudioChunk(responseText);
+          } else {
+            console.log('❌ Plain text response too short or empty');
+            onAudioChunk(`[DEBUG] Webhook returned plain text: "${responseText}"`);
           }
         }
       } else {
-        console.error('Webhook error:', response.status, response.statusText);
+        const errorText = await response.text();
+        console.error('Webhook error:', response.status, response.statusText, errorText);
         
         // Retry on server errors (5xx) up to 2 times
         if (response.status >= 500 && retryCount < 2) {
-          console.log(`Retrying request (attempt ${retryCount + 1})`);
-          setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000);
+          console.log(`Retrying request due to server error (attempt ${retryCount + 1})`);
+          setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000 * (retryCount + 1));
           return;
         }
         
-        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}`);
+        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}${errorText ? ' - ' + errorText : ''}`);
       }
     } catch (error) {
       console.error('Error sending audio to webhook:', error);
@@ -254,14 +296,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       // Retry on network errors up to 2 times
       if (retryCount < 2) {
         console.log(`Retrying after network error (attempt ${retryCount + 1})`);
-        setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000);
+        setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000 * (retryCount + 1));
         return;
       }
       
       // Only show fallback after all retries failed
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
-          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond`);
+          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond (>15s)`);
         } else if (error.message.includes('Failed to fetch')) {
           onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL and CORS settings`);
         } else {
