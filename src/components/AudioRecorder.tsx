@@ -1,7 +1,9 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface AudioRecorderProps {
   isRecording: boolean;
@@ -25,6 +27,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   mode
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
+  const [showSystemAudioInstructions, setShowSystemAudioInstructions] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -44,15 +47,60 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           } 
         });
       } else {
-        // System audio capture via screen sharing
-        stream = await navigator.mediaDevices.getDisplayMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 16000
-          },
-          video: false
-        });
+        // Show instructions for system audio before attempting
+        setShowSystemAudioInstructions(true);
+        
+        // System audio capture via screen sharing with audio
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ 
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              sampleRate: 16000
+            },
+            video: true // Video is required for getDisplayMedia, but we can hide it
+          });
+
+          // Check if audio track is available
+          const audioTracks = stream.getAudioTracks();
+          if (audioTracks.length === 0) {
+            // Stop video track since we don't need it
+            stream.getVideoTracks().forEach(track => track.stop());
+            throw new Error('No audio track available. Please make sure to check "Share audio" when sharing your screen.');
+          }
+
+          // Hide instructions once successful
+          setShowSystemAudioInstructions(false);
+          
+          toast({
+            title: "System audio connected",
+            description: "Successfully capturing system audio from screen share"
+          });
+
+        } catch (screenShareError: any) {
+          setShowSystemAudioInstructions(false);
+          
+          if (screenShareError.name === 'NotAllowedError') {
+            toast({
+              title: "Screen sharing cancelled",
+              description: "System audio capture requires screen sharing permission",
+              variant: "destructive"
+            });
+          } else if (screenShareError.message.includes('No audio track')) {
+            toast({
+              title: "No audio detected",
+              description: "Please share your screen again and make sure to check 'Share audio'",
+              variant: "destructive"
+            });
+          } else {
+            toast({
+              title: "System audio failed",
+              description: screenShareError.message || "Unable to capture system audio",
+              variant: "destructive"
+            });
+          }
+          return;
+        }
       }
 
       streamRef.current = stream;
@@ -117,9 +165,25 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
     } catch (error) {
       console.error('Error starting recording:', error);
+      setShowSystemAudioInstructions(false);
+      
+      let errorMessage = `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`;
+      
+      if (error instanceof Error) {
+        if (error.name === 'NotAllowedError') {
+          errorMessage = mode === 'microphone' 
+            ? 'Microphone access denied. Please allow microphone permissions.'
+            : 'Screen sharing permission denied. System audio requires screen sharing.';
+        } else if (error.name === 'NotFoundError') {
+          errorMessage = mode === 'microphone'
+            ? 'No microphone found. Please connect a microphone.'
+            : 'No audio source found in screen share.';
+        }
+      }
+      
       toast({
         title: "Recording failed",
-        description: `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`,
+        description: errorMessage,
         variant: "destructive"
       });
     }
@@ -142,6 +206,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       audioContextRef.current.close();
     }
 
+    setShowSystemAudioInstructions(false);
     onStopRecording();
     onAudioLevel(0);
     
@@ -312,26 +377,44 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const label = mode === 'microphone' ? 'Microphone' : 'System Audio';
 
   return (
-    <div className="flex flex-col items-center space-y-2">
-      <Button
-        onClick={handleToggleRecording}
-        variant={isRecording ? "destructive" : "outline"}
-        size="lg"
-        className={`w-full h-16 ${
-          isRecording 
-            ? 'bg-red-600 hover:bg-red-700 text-white' 
-            : 'border-slate-600 text-slate-300 hover:bg-slate-800'
-        }`}
-      >
-        <Icon className="w-6 h-6 mr-2" />
-        {isRecording ? `Stop ${label}` : `Start ${label}`}
-      </Button>
-      
-      <div className="text-center">
-        <p className="text-sm text-slate-400">{label}</p>
-        {mode === 'system' && (
-          <p className="text-xs text-slate-500">Requires screen sharing permission</p>
-        )}
+    <div className="flex flex-col space-y-3">
+      {/* System Audio Instructions */}
+      {mode === 'system' && showSystemAudioInstructions && (
+        <Alert className="bg-blue-900/20 border-blue-700">
+          <Info className="h-4 w-4" />
+          <AlertDescription className="text-sm">
+            <strong>To capture system audio:</strong>
+            <br />
+            1. Select "Share screen" in the browser dialog
+            <br />
+            2. Check "Share audio" checkbox
+            <br />
+            3. Choose the tab/application with audio
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="flex flex-col items-center space-y-2">
+        <Button
+          onClick={handleToggleRecording}
+          variant={isRecording ? "destructive" : "outline"}
+          size="lg"
+          className={`w-full h-16 ${
+            isRecording 
+              ? 'bg-red-600 hover:bg-red-700 text-white' 
+              : 'border-slate-600 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Icon className="w-6 h-6 mr-2" />
+          {isRecording ? `Stop ${label}` : `Start ${label}`}
+        </Button>
+        
+        <div className="text-center">
+          <p className="text-sm text-slate-400">{label}</p>
+          {mode === 'system' && !isRecording && (
+            <p className="text-xs text-slate-500">Requires screen sharing with audio</p>
+          )}
+        </div>
       </div>
     </div>
   );
