@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
@@ -34,6 +33,27 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
 
+  // Get supported MIME type for MediaRecorder
+  const getSupportedMimeType = () => {
+    const types = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+      'audio/wav'
+    ];
+    
+    for (const type of types) {
+      if (MediaRecorder.isTypeSupported(type)) {
+        console.log('Using MIME type:', type);
+        return type;
+      }
+    }
+    
+    console.log('No supported MIME type found, using default');
+    return '';
+  };
+
   const startRecording = async () => {
     try {
       let stream: MediaStream;
@@ -43,7 +63,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            sampleRate: 16000
+            sampleRate: 44100
           } 
         });
       } else {
@@ -56,9 +76,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             audio: {
               echoCancellation: true,
               noiseSuppression: true,
-              sampleRate: 16000
+              sampleRate: 44100
             },
-            video: true // Video is required for getDisplayMedia, but we can hide it
+            video: {
+              width: 1,
+              height: 1
+            }
           });
 
           // Check if audio track is available
@@ -68,6 +91,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             stream.getVideoTracks().forEach(track => track.stop());
             throw new Error('No audio track available. Please make sure to check "Share audio" when sharing your screen.');
           }
+
+          console.log('Audio tracks found:', audioTracks.length);
+          console.log('Audio track settings:', audioTracks[0].getSettings());
 
           // Hide instructions once successful
           setShowSystemAudioInstructions(false);
@@ -107,52 +133,76 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       setHasPermission(true);
 
       // Set up audio analysis for level visualization
-      audioContextRef.current = new AudioContext();
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      source.connect(analyserRef.current);
+      try {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        analyserRef.current = audioContextRef.current.createAnalyser();
+        const source = audioContextRef.current.createMediaStreamSource(stream);
+        source.connect(analyserRef.current);
+        
+        analyserRef.current.fftSize = 256;
+        const bufferLength = analyserRef.current.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const updateAudioLevel = () => {
+          if (analyserRef.current && isRecording) {
+            analyserRef.current.getByteFrequencyData(dataArray);
+            const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+            onAudioLevel((average / 255) * 100);
+            requestAnimationFrame(updateAudioLevel);
+          }
+        };
+        updateAudioLevel();
+      } catch (audioContextError) {
+        console.warn('Audio context setup failed:', audioContextError);
+        // Continue without audio level visualization
+      }
+
+      // Set up MediaRecorder with supported format
+      const mimeType = getSupportedMimeType();
+      const mediaRecorderOptions: MediaRecorderOptions = {};
       
-      analyserRef.current.fftSize = 256;
-      const bufferLength = analyserRef.current.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
+      if (mimeType) {
+        mediaRecorderOptions.mimeType = mimeType;
+      }
 
-      const updateAudioLevel = () => {
-        if (analyserRef.current && isRecording) {
-          analyserRef.current.getByteFrequencyData(dataArray);
-          const average = dataArray.reduce((a, b) => a + b) / bufferLength;
-          onAudioLevel((average / 255) * 100);
-          requestAnimationFrame(updateAudioLevel);
-        }
-      };
-      updateAudioLevel();
-
-      // Set up MediaRecorder for chunked recording
-      mediaRecorderRef.current = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
+      console.log('Creating MediaRecorder with options:', mediaRecorderOptions);
+      mediaRecorderRef.current = new MediaRecorder(stream, mediaRecorderOptions);
 
       const audioChunks: Blob[] = [];
       
       mediaRecorderRef.current.ondataavailable = (event) => {
+        console.log('Data available, size:', event.data.size);
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
 
       mediaRecorderRef.current.onstop = async () => {
+        console.log('MediaRecorder stopped, chunks:', audioChunks.length);
         if (audioChunks.length > 0) {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+          console.log('Created audio blob, size:', audioBlob.size);
           await sendAudioToWebhook(audioBlob);
         }
       };
 
-      mediaRecorderRef.current.start();
+      mediaRecorderRef.current.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        toast({
+          title: "Recording error",
+          description: "An error occurred during recording",
+          variant: "destructive"
+        });
+      };
+
+      console.log('Starting MediaRecorder...');
+      mediaRecorderRef.current.start(1000); // Record in 1-second chunks
       
       // Send chunks every 3 seconds
       chunkIntervalRef.current = setInterval(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
-          mediaRecorderRef.current.start();
+          console.log('Requesting data from MediaRecorder');
+          mediaRecorderRef.current.requestData();
         }
       }, 3000);
 
@@ -170,6 +220,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       let errorMessage = `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`;
       
       if (error instanceof Error) {
+        console.error('Error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        });
+        
         if (error.name === 'NotAllowedError') {
           errorMessage = mode === 'microphone' 
             ? 'Microphone access denied. Please allow microphone permissions.'
@@ -178,6 +234,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           errorMessage = mode === 'microphone'
             ? 'No microphone found. Please connect a microphone.'
             : 'No audio source found in screen share.';
+        } else if (error.name === 'NotSupportedError') {
+          errorMessage = 'Audio recording not supported in this browser or configuration.';
         }
       }
       
@@ -190,6 +248,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   };
 
   const stopRecording = () => {
+    console.log('Stopping recording...');
+    
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
@@ -199,10 +259,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     }
     
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current.getTracks().forEach(track => {
+        console.log('Stopping track:', track.kind);
+        track.stop();
+      });
     }
     
-    if (audioContextRef.current) {
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close();
     }
 
