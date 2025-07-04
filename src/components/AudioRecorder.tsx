@@ -190,7 +190,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             
             if (event.data.size === 0) {
               console.warn('⚠️ Received empty chunk, skipping...');
-              // Still continue to next chunk even if this one is empty
               if (isActivelyRecordingRef.current) {
                 setTimeout(recordChunk, 100);
               }
@@ -228,18 +227,15 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           } catch (error) {
             console.error('❌ Error starting MediaRecorder:', error);
             if (isActivelyRecordingRef.current) {
-              setTimeout(recordChunk, 1000); // Retry after 1 second
+              setTimeout(recordChunk, 1000);
             }
           }
         };
 
-        // Start the first chunk
         recordChunk();
       };
 
-      // Start continuous chunking
       startChunking();
-
       onStartRecording();
       
       toast({
@@ -380,19 +376,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           if (currentChunk || fullTranscription) {
             console.log(`🔄 Processing transcription for chunk #${chunkNumber}`);
             
-            // Use currentChunk for the chunk display (new text only)
+            // Pass the current chunk for display in Latest Chunk section
             if (currentChunk) {
-              onAudioChunk(currentChunk); // Pass only the new chunk text
+              onAudioChunk(currentChunk);
             }
             
-            // Use fullTranscription for the complete transcription display
+            // Handle full transcription accumulation
             if (fullTranscription) {
+              // Use the full transcription from webhook if provided
               accumulatedTranscriptionRef.current = fullTranscription;
               onFullTranscription(fullTranscription);
             } else if (currentChunk) {
-              // If no fullTranscription provided, build it incrementally
-              accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + currentChunk;
-              onFullTranscription(accumulatedTranscriptionRef.current);
+              // If only currentChunk is provided, accumulate it
+              // Check if this chunk is already included to avoid duplicates
+              const currentAccumulated = accumulatedTranscriptionRef.current.toLowerCase();
+              const newChunkLower = currentChunk.toLowerCase();
+              
+              if (!currentAccumulated.includes(newChunkLower)) {
+                accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + currentChunk;
+                onFullTranscription(accumulatedTranscriptionRef.current);
+                console.log(`📝 Accumulated transcription: "${accumulatedTranscriptionRef.current}"`);
+              } else {
+                console.log(`⚠️ Chunk #${chunkNumber} already exists in transcription, skipping append`);
+                // Still update the UI with current accumulated text
+                onFullTranscription(accumulatedTranscriptionRef.current);
+              }
             }
             
             toast({
@@ -411,9 +419,20 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           if (plainText) {
             console.log(`✅ Using plain text for chunk #${chunkNumber}`);
             
-            // For plain text responses, treat as currentChunk
+            // For plain text responses, treat as currentChunk and accumulate
             onAudioChunk(plainText);
-            accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + plainText;
+            
+            // Check for duplicates before accumulating
+            const currentAccumulated = accumulatedTranscriptionRef.current.toLowerCase();
+            const newTextLower = plainText.toLowerCase();
+            
+            if (!currentAccumulated.includes(newTextLower)) {
+              accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + plainText;
+              console.log(`📝 Accumulated transcription: "${accumulatedTranscriptionRef.current}"`);
+            } else {
+              console.log(`⚠️ Plain text chunk #${chunkNumber} already exists, skipping append`);
+            }
+            
             onFullTranscription(accumulatedTranscriptionRef.current);
             
             toast({
