@@ -33,24 +33,24 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
 
-  // Get supported MIME type for MediaRecorder
-  const getSupportedMimeType = () => {
+  // Get the most compatible MIME type
+  const getBestMimeType = () => {
+    // Try the most widely supported formats first
     const types = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
+      'audio/webm', // Basic webm without codec specification
       'audio/mp4',
-      'audio/ogg;codecs=opus',
-      'audio/wav'
+      'audio/ogg',
+      '' // Let browser choose default
     ];
     
     for (const type of types) {
-      if (MediaRecorder.isTypeSupported(type)) {
-        console.log('Using MIME type:', type);
+      if (type === '' || MediaRecorder.isTypeSupported(type)) {
+        console.log('Selected MIME type:', type || 'browser default');
         return type;
       }
     }
     
-    console.log('No supported MIME type found, using default');
+    console.log('Using browser default MIME type');
     return '';
   };
 
@@ -59,41 +59,33 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       let stream: MediaStream;
       
       if (mode === 'microphone') {
+        // Simplified audio constraints for better compatibility
         stream = await navigator.mediaDevices.getUserMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 44100
-          } 
+          audio: true // Use basic audio constraints first
         });
       } else {
         // Show instructions for system audio before attempting
         setShowSystemAudioInstructions(true);
         
-        // System audio capture via screen sharing with audio
         try {
+          // Basic display media request
           stream = await navigator.mediaDevices.getDisplayMedia({ 
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              sampleRate: 44100
-            },
-            video: {
-              width: 1,
-              height: 1
-            }
+            audio: true,
+            video: true // Required for getDisplayMedia
           });
 
           // Check if audio track is available
           const audioTracks = stream.getAudioTracks();
           if (audioTracks.length === 0) {
-            // Stop video track since we don't need it
+            // Stop video tracks since we don't need them
             stream.getVideoTracks().forEach(track => track.stop());
             throw new Error('No audio track available. Please make sure to check "Share audio" when sharing your screen.');
           }
 
           console.log('Audio tracks found:', audioTracks.length);
-          console.log('Audio track settings:', audioTracks[0].getSettings());
+          
+          // Stop video tracks to save bandwidth
+          stream.getVideoTracks().forEach(track => track.stop());
 
           // Hide instructions once successful
           setShowSystemAudioInstructions(false);
@@ -157,36 +149,52 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         // Continue without audio level visualization
       }
 
-      // Set up MediaRecorder with supported format
-      const mimeType = getSupportedMimeType();
-      const mediaRecorderOptions: MediaRecorderOptions = {};
-      
-      if (mimeType) {
-        mediaRecorderOptions.mimeType = mimeType;
+      // Try to create MediaRecorder with minimal options
+      const mimeType = getBestMimeType();
+      let mediaRecorder: MediaRecorder;
+
+      try {
+        // First try with MIME type
+        if (mimeType) {
+          mediaRecorder = new MediaRecorder(stream, { mimeType });
+        } else {
+          // Fallback to default configuration
+          mediaRecorder = new MediaRecorder(stream);
+        }
+      } catch (mimeError) {
+        console.warn('Failed to create MediaRecorder with MIME type, trying default:', mimeError);
+        try {
+          // Last resort - basic MediaRecorder
+          mediaRecorder = new MediaRecorder(stream);
+        } catch (basicError) {
+          throw new Error('MediaRecorder is not supported in this browser configuration');
+        }
       }
 
-      console.log('Creating MediaRecorder with options:', mediaRecorderOptions);
-      mediaRecorderRef.current = new MediaRecorder(stream, mediaRecorderOptions);
+      mediaRecorderRef.current = mediaRecorder;
+      console.log('MediaRecorder created successfully');
 
       const audioChunks: Blob[] = [];
       
-      mediaRecorderRef.current.ondataavailable = (event) => {
+      mediaRecorder.ondataavailable = (event) => {
         console.log('Data available, size:', event.data.size);
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
 
-      mediaRecorderRef.current.onstop = async () => {
+      mediaRecorder.onstop = async () => {
         console.log('MediaRecorder stopped, chunks:', audioChunks.length);
         if (audioChunks.length > 0) {
-          const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+          const audioBlob = new Blob(audioChunks, { 
+            type: mediaRecorder.mimeType || 'audio/webm' 
+          });
           console.log('Created audio blob, size:', audioBlob.size);
           await sendAudioToWebhook(audioBlob);
         }
       };
 
-      mediaRecorderRef.current.onerror = (event) => {
+      mediaRecorder.onerror = (event) => {
         console.error('MediaRecorder error:', event);
         toast({
           title: "Recording error",
@@ -195,8 +203,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         });
       };
 
-      console.log('Starting MediaRecorder...');
-      mediaRecorderRef.current.start(1000); // Record in 1-second chunks
+      // Try to start recording with error handling
+      try {
+        console.log('Starting MediaRecorder...');
+        mediaRecorder.start(1000); // Record in 1-second chunks
+      } catch (startError) {
+        console.error('Failed to start MediaRecorder:', startError);
+        throw new Error('Failed to start recording - browser may not support this audio format');
+      }
       
       // Send chunks every 3 seconds
       chunkIntervalRef.current = setInterval(() => {
@@ -217,7 +231,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       console.error('Error starting recording:', error);
       setShowSystemAudioInstructions(false);
       
-      let errorMessage = `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`;
+      let errorMessage = `Unable to start ${mode === 'microphone' ? 'microphone' : 'system audio'} recording.`;
       
       if (error instanceof Error) {
         console.error('Error details:', {
@@ -228,14 +242,16 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         
         if (error.name === 'NotAllowedError') {
           errorMessage = mode === 'microphone' 
-            ? 'Microphone access denied. Please allow microphone permissions.'
+            ? 'Microphone access denied. Please allow microphone permissions and try again.'
             : 'Screen sharing permission denied. System audio requires screen sharing.';
         } else if (error.name === 'NotFoundError') {
           errorMessage = mode === 'microphone'
-            ? 'No microphone found. Please connect a microphone.'
+            ? 'No microphone found. Please connect a microphone and try again.'
             : 'No audio source found in screen share.';
-        } else if (error.name === 'NotSupportedError') {
-          errorMessage = 'Audio recording not supported in this browser or configuration.';
+        } else if (error.name === 'NotSupportedError' || error.message.includes('not supported')) {
+          errorMessage = 'Audio recording is not supported in this browser. Try using Chrome, Firefox, or Edge.';
+        } else if (error.message.includes('MediaRecorder')) {
+          errorMessage = 'Recording failed due to browser compatibility issues. Please try a different browser.';
         }
       }
       
