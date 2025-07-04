@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Mic, MicOff, Monitor, Upload, Copy, Clear, Send, Settings, Play, Stop } from 'lucide-react';
+import { Mic, MicOff, Monitor, Upload, Copy, Trash2, Send, Settings, Play, Square } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import AudioRecorder from '@/components/AudioRecorder';
 import TranscriptionDisplay from '@/components/TranscriptionDisplay';
@@ -228,7 +227,7 @@ const Index = () => {
                   disabled={transcriptionChunks.length === 0}
                   className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
-                  <Clear className="w-4 h-4 mr-2" />
+                  <Trash2 className="w-4 h-4 mr-2" />
                   Clear
                 </Button>
               </div>
