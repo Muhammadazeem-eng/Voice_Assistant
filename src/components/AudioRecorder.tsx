@@ -26,6 +26,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   mode
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
+  // Add local recording state to handle timing issues
+  const [localIsRecording, setLocalIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -137,9 +139,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     try {
       console.log(`🎙️ Starting ${mode} recording...`);
       
-      // Call onStartRecording FIRST to set the recording state
-      onStartRecording();
-      
       let stream: MediaStream;
       
       if (mode === 'microphone') {
@@ -177,20 +176,28 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       const dataArray = new Uint8Array(bufferLength);
 
       const updateAudioLevel = () => {
-        if (analyserRef.current && isRecording) {
+        if (analyserRef.current && localIsRecording) {
           analyserRef.current.getByteFrequencyData(dataArray);
           const average = dataArray.reduce((a, b) => a + b) / bufferLength;
           onAudioLevel((average / 255) * 100);
           requestAnimationFrame(updateAudioLevel);
         }
       };
+
+      // Set local recording state first
+      console.log('🎯 Setting local recording state to true');
+      setLocalIsRecording(true);
+      
+      // Then call parent callback
+      onStartRecording();
+      
+      // Start audio level monitoring
       updateAudioLevel();
 
-      // Start continuous chunking with a small delay to ensure recording state is set
+      // Start continuous chunking immediately with correct state
       console.log('🔄 Starting continuous chunking...');
-      setTimeout(() => {
-        startContinuousChunking(stream);
-      }, 100);
+      console.log(`🎯 Local recording state: ${true}`);
+      startContinuousChunking(stream);
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
@@ -199,7 +206,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
     } catch (error) {
       console.error('❌ Error starting recording:', error);
-      // Reset recording state if there's an error
+      // Reset both states if there's an error
+      setLocalIsRecording(false);
       onStopRecording();
       toast({
         title: "Recording failed",
@@ -212,15 +220,16 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const startContinuousChunking = (stream: MediaStream) => {
     const mimeType = getSupportedMimeType();
     console.log(`📦 Starting chunking with MIME type: ${mimeType}`);
-    console.log(`🎯 Recording state when chunking starts: ${isRecording}`);
+    console.log(`🎯 Local recording state when chunking starts: ${localIsRecording}`);
     isChunkingRef.current = true;
     
     const createChunk = () => {
-      console.log(`🎯 Creating new chunk... Recording: ${isRecording}, Chunking: ${isChunkingRef.current}`);
+      console.log(`🎯 Creating new chunk... Local Recording: ${localIsRecording}, Chunking: ${isChunkingRef.current}`);
       
-      if (!isRecording || !streamRef.current || !isChunkingRef.current) {
+      // Use local recording state instead of prop
+      if (!localIsRecording || !streamRef.current || !isChunkingRef.current) {
         console.log('⏹️ Stopping chunking - conditions not met');
-        console.log(`   - isRecording: ${isRecording}`);
+        console.log(`   - localIsRecording: ${localIsRecording}`);
         console.log(`   - streamRef.current: ${!!streamRef.current}`);
         console.log(`   - isChunkingRef.current: ${isChunkingRef.current}`);
         return;
@@ -257,13 +266,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           console.log('⚠️ No audio chunks to process');
         }
         
-        // Start next chunk if still recording
-        if (isRecording && streamRef.current && isChunkingRef.current) {
+        // Start next chunk if still recording (use local state)
+        if (localIsRecording && streamRef.current && isChunkingRef.current) {
           console.log('🔄 Scheduling next chunk in 100ms...');
           setTimeout(createChunk, 100); // Small delay to prevent overlap
         } else {
           console.log('🛑 Not scheduling next chunk - recording stopped or chunking disabled');
-          console.log(`   - isRecording: ${isRecording}`);
+          console.log(`   - localIsRecording: ${localIsRecording}`);
           console.log(`   - streamRef.current: ${!!streamRef.current}`);
           console.log(`   - isChunkingRef.current: ${isChunkingRef.current}`);
         }
@@ -300,6 +309,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const stopRecording = () => {
     console.log('🛑 Stopping recording...');
+    
+    // Set local recording state to false first
+    setLocalIsRecording(false);
     isChunkingRef.current = false;
     
     if (chunkingIntervalRef.current) {
@@ -454,30 +466,30 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   };
 
   const handleToggleRecording = () => {
-    if (isRecording) {
+    if (localIsRecording) {
       stopRecording();
     } else {
       startRecording();
     }
   };
 
-  const Icon = mode === 'microphone' ? (isRecording ? MicOff : Mic) : (isRecording ? MonitorOff : Monitor);
+  const Icon = mode === 'microphone' ? (localIsRecording ? MicOff : Mic) : (localIsRecording ? MonitorOff : Monitor);
   const label = mode === 'microphone' ? 'Microphone' : 'System Audio';
 
   return (
     <div className="flex flex-col items-center space-y-2">
       <Button
         onClick={handleToggleRecording}
-        variant={isRecording ? "destructive" : "outline"}
+        variant={localIsRecording ? "destructive" : "outline"}
         size="lg"
         className={`w-full h-16 ${
-          isRecording 
+          localIsRecording 
             ? 'bg-red-600 hover:bg-red-700 text-white' 
             : 'border-slate-600 text-slate-300 hover:bg-slate-800'
         }`}
       >
         <Icon className="w-6 h-6 mr-2" />
-        {isRecording ? `Stop ${label}` : `Start ${label}`}
+        {localIsRecording ? `Stop ${label}` : `Start ${label}`}
       </Button>
       
       <div className="text-center">
@@ -485,7 +497,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         {mode === 'system' && (
           <p className="text-xs text-slate-500">Requires screen sharing permission</p>
         )}
-        {isRecording && (
+        {localIsRecording && (
           <p className="text-xs text-green-400">Continuous 2.5s chunks</p>
         )}
       </div>
