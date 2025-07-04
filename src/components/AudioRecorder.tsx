@@ -1,7 +1,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 
 interface AudioRecorderProps {
@@ -24,6 +24,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   mode
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
+  const [showSystemAudioInfo, setShowSystemAudioInfo] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -43,14 +44,58 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           } 
         });
       } else {
-        stream = await navigator.mediaDevices.getDisplayMedia({ 
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: 16000
-          },
-          video: false
-        });
+        // System audio requires screen sharing with audio
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ 
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              sampleRate: 16000,
+              channelCount: 2
+            },
+            video: true // Required for getDisplayMedia
+          });
+
+          // Check if audio track is available
+          const audioTracks = stream.getAudioTracks();
+          if (audioTracks.length === 0) {
+            // Stop video track since we only need audio
+            stream.getVideoTracks().forEach(track => track.stop());
+            
+            toast({
+              title: "No audio detected",
+              description: "Make sure to check 'Share audio' when sharing your screen. Try again and select a tab/application with audio.",
+              variant: "destructive"
+            });
+            return;
+          }
+
+          // Stop video track since we only need audio for transcription
+          stream.getVideoTracks().forEach(track => track.stop());
+          
+          toast({
+            title: "System audio connected",
+            description: "Successfully capturing system audio for transcription",
+          });
+
+        } catch (screenError) {
+          console.error('Screen sharing error:', screenError);
+          
+          if (screenError.name === 'NotAllowedError') {
+            toast({
+              title: "Screen sharing cancelled",
+              description: "System audio capture requires screen sharing permission. Click the info icon for instructions.",
+              variant: "destructive"
+            });
+          } else {
+            toast({
+              title: "System audio unavailable",
+              description: "Unable to access system audio. Click the info icon for setup instructions.",
+              variant: "destructive"
+            });
+          }
+          return;
+        }
       }
 
       streamRef.current = stream;
@@ -245,6 +290,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     if (isRecording) {
       stopRecording();
     } else {
+      if (mode === 'system' && !isRecording) {
+        setShowSystemAudioInfo(true);
+        setTimeout(() => setShowSystemAudioInfo(false), 5000);
+      }
       startRecording();
     }
   };
@@ -269,9 +318,26 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       </Button>
       
       <div className="text-center">
-        <p className="text-sm text-slate-400">{label}</p>
-        {mode === 'system' && (
-          <p className="text-xs text-slate-500">Requires screen sharing permission</p>
+        <div className="flex items-center justify-center gap-2">
+          <p className="text-sm text-slate-400">{label}</p>
+          {mode === 'system' && (
+            <Info 
+              className="w-4 h-4 text-slate-500 cursor-help" 
+              onClick={() => setShowSystemAudioInfo(!showSystemAudioInfo)}
+            />
+          )}
+        </div>
+        
+        {mode === 'system' && showSystemAudioInfo && (
+          <div className="mt-2 p-3 bg-slate-800 rounded-lg border border-slate-600">
+            <p className="text-xs text-slate-300 mb-2 font-medium">To capture system audio:</p>
+            <ol className="text-xs text-slate-400 space-y-1 list-decimal list-inside text-left">
+              <li>Click "Share screen" when prompted</li>
+              <li>Check "Share audio" checkbox</li>
+              <li>Choose the tab/app with audio</li>
+              <li>Click "Share" to start capture</li>
+            </ol>
+          </div>
         )}
       </div>
     </div>
