@@ -1,0 +1,233 @@
+
+import React, { useState, useRef, useEffect } from 'react';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Badge } from '@/components/ui/badge';
+import { Send, FileText } from 'lucide-react';
+import { toast } from '@/hooks/use-toast';
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+interface ChatInterfaceProps {
+  messages: ChatMessage[];
+  onSendMessage: (role: 'user' | 'assistant', content: string) => void;
+  apiKey: string;
+  transcriptionText: string;
+}
+
+const ChatInterface: React.FC<ChatInterfaceProps> = ({
+  messages,
+  onSendMessage,
+  apiKey,
+  transcriptionText
+}) => {
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Auto-scroll to bottom when new messages arrive
+    if (scrollAreaRef.current) {
+      const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
+      if (scrollContainer) {
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      }
+    }
+  }, [messages]);
+
+  const sendMessage = async () => {
+    if (!inputText.trim()) return;
+    
+    if (!apiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenAI API key in the settings.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const userMessage = inputText.trim();
+    setInputText('');
+    onSendMessage('user', userMessage);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4-turbo-preview',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a helpful AI assistant for meeting transcription and analysis. You can help analyze transcriptions, answer questions about the content, and provide insights.'
+            },
+            ...messages.map(msg => ({
+              role: msg.role,
+              content: msg.content
+            })),
+            {
+              role: 'user',
+              content: userMessage
+            }
+          ],
+          max_tokens: 1000,
+          temperature: 0.7
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const assistantMessage = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+      
+      onSendMessage('assistant', assistantMessage);
+    } catch (error) {
+      console.error('Error calling OpenAI API:', error);
+      toast({
+        title: "API Error",
+        description: "Failed to get response from AI assistant. Please check your API key and try again.",
+        variant: "destructive"
+      });
+      onSendMessage('assistant', 'Sorry, I encountered an error while processing your request.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const insertTranscription = () => {
+    if (!transcriptionText.trim()) {
+      toast({
+        title: "No transcription available",
+        description: "Start recording or upload a file to generate transcription text.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const transcriptionPrompt = `Please analyze this meeting transcription:\n\n"${transcriptionText}"\n\nWhat are the key points and action items?`;
+    setInputText(transcriptionPrompt);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  const formatTime = (date: Date) => {
+    return date.toLocaleTimeString('en-US', { 
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  return (
+    <Card className="bg-slate-900/50 border-slate-700 h-[600px] flex flex-col">
+      <div className="p-4 border-b border-slate-700">
+        <div className="flex items-center justify-between">
+          <h4 className="font-medium text-slate-200">AI Chat Assistant</h4>
+          <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
+            {messages.length} messages
+          </Badge>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+        {messages.length === 0 ? (
+          <div className="text-slate-500 italic text-sm text-center py-8">
+            <p>Start a conversation with the AI assistant.</p>
+            <p className="mt-2">Ask questions about your transcription or get meeting insights.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {messages.map((message) => (
+              <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] rounded-lg p-3 ${
+                  message.role === 'user' 
+                    ? 'bg-blue-600 text-white' 
+                    : 'bg-slate-800 text-slate-200 border border-slate-700'
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge variant={message.role === 'user' ? 'secondary' : 'outline'} className="text-xs">
+                      {message.role === 'user' ? 'You' : 'AI'}
+                    </Badge>
+                    <span className="text-xs opacity-70">
+                      {formatTime(message.timestamp)}
+                    </span>
+                  </div>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                    {message.content}
+                  </p>
+                </div>
+              </div>
+            ))}
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="bg-slate-800 text-slate-200 border border-slate-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2">
+                    <div className="flex space-x-1">
+                      <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
+                      <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                      <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                    </div>
+                    <span className="text-xs text-slate-400">AI is thinking...</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </ScrollArea>
+
+      <div className="p-4 border-t border-slate-700">
+        <div className="flex gap-2 mb-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={insertTranscription}
+            disabled={!transcriptionText.trim()}
+            className="border-slate-600 text-slate-300 hover:bg-slate-800"
+          >
+            <FileText className="w-4 h-4 mr-1" />
+            Insert Transcription
+          </Button>
+        </div>
+        
+        <div className="flex gap-2">
+          <Input
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask about the transcription or chat with AI..."
+            className="bg-slate-800 border-slate-600 text-slate-50 flex-1"
+            disabled={isLoading}
+          />
+          <Button 
+            onClick={sendMessage}
+            disabled={!inputText.trim() || isLoading}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            <Send className="w-4 h-4" />
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+export default ChatInterface;
