@@ -136,6 +136,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const startRecording = async () => {
     try {
       console.log(`🎙️ Starting ${mode} recording...`);
+      
+      // Call onStartRecording FIRST to set the recording state
+      onStartRecording();
+      
       let stream: MediaStream;
       
       if (mode === 'microphone') {
@@ -182,11 +186,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       };
       updateAudioLevel();
 
-      // Start continuous chunking
+      // Start continuous chunking with a small delay to ensure recording state is set
       console.log('🔄 Starting continuous chunking...');
-      startContinuousChunking(stream);
-
-      onStartRecording();
+      setTimeout(() => {
+        startContinuousChunking(stream);
+      }, 100);
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
@@ -195,6 +199,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
     } catch (error) {
       console.error('❌ Error starting recording:', error);
+      // Reset recording state if there's an error
+      onStopRecording();
       toast({
         title: "Recording failed",
         description: `Unable to access ${mode === 'microphone' ? 'microphone' : 'system audio'}. Please check permissions.`,
@@ -206,6 +212,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const startContinuousChunking = (stream: MediaStream) => {
     const mimeType = getSupportedMimeType();
     console.log(`📦 Starting chunking with MIME type: ${mimeType}`);
+    console.log(`🎯 Recording state when chunking starts: ${isRecording}`);
     isChunkingRef.current = true;
     
     const createChunk = () => {
@@ -213,6 +220,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       if (!isRecording || !streamRef.current || !isChunkingRef.current) {
         console.log('⏹️ Stopping chunking - conditions not met');
+        console.log(`   - isRecording: ${isRecording}`);
+        console.log(`   - streamRef.current: ${!!streamRef.current}`);
+        console.log(`   - isChunkingRef.current: ${isChunkingRef.current}`);
         return;
       }
 
@@ -225,7 +235,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       console.log('🎙️ MediaRecorder created, starting recording...');
 
       mediaRecorder.ondataavailable = (event) => {
-        console.log(`📊 Data available: ${event.data.size} bytes`);
+        console.log(`📊 Data available: ${event.data.size} bytes, type: ${event.data.type}`);
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
@@ -238,6 +248,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           console.log(`📦 Raw audio chunk: ${audioBlob.size} bytes (${mimeType})`);
           
           // ALWAYS convert to WAV for OpenAI compatibility
+          console.log('🔄 Converting to WAV format...');
           const wavBlob = await convertToWav(audioBlob);
           console.log(`🎯 Sending WAV chunk: ${wavBlob.size} bytes`);
           
@@ -252,6 +263,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           setTimeout(createChunk, 100); // Small delay to prevent overlap
         } else {
           console.log('🛑 Not scheduling next chunk - recording stopped or chunking disabled');
+          console.log(`   - isRecording: ${isRecording}`);
+          console.log(`   - streamRef.current: ${!!streamRef.current}`);
+          console.log(`   - isChunkingRef.current: ${isChunkingRef.current}`);
         }
       };
 
@@ -259,11 +273,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         console.error('❌ MediaRecorder error:', event);
       };
 
+      mediaRecorder.onstart = () => {
+        console.log('▶️ MediaRecorder started recording');
+      };
+
       // Record for 2.5 seconds
+      console.log('🚀 Starting MediaRecorder...');
       mediaRecorder.start();
-      console.log('▶️ MediaRecorder started, will stop in 2500ms');
+      console.log('⏰ MediaRecorder started, will stop in 2500ms');
       
       setTimeout(() => {
+        console.log(`⏸️ Attempting to stop MediaRecorder. Current state: ${mediaRecorder.state}`);
         if (mediaRecorder.state === 'recording') {
           console.log('⏸️ Stopping MediaRecorder after 2.5 seconds');
           mediaRecorder.stop();
