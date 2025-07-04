@@ -1,13 +1,13 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
+import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 
 interface AudioRecorderProps {
   isRecording: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
+  onAudioChunk: (text: string) => void;
   onFullTranscription: (text: string) => void;
   onAudioLevel: (level: number) => void;
   webhookUrl: string;
@@ -18,42 +18,18 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   isRecording,
   onStartRecording,
   onStopRecording,
+  onAudioChunk,
   onFullTranscription,
   onAudioLevel,
   webhookUrl,
   mode
 }) => {
   const [hasPermission, setHasPermission] = useState(false);
-  const [showSystemAudioInfo, setShowSystemAudioInfo] = useState(false);
-  const [isVoiceDetected, setIsVoiceDetected] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
-  const voiceActivityRef = useRef<boolean>(false);
-  const silenceTimeoutRef = useRef<NodeJS.Timeout>();
-  const pendingChunksRef = useRef<Blob[]>([]);
-
-  // Voice activity detection parameters
-  const VOICE_THRESHOLD = 0.015; // Slightly higher threshold for better noise filtering
-  const SILENCE_DURATION = 2000; // 2 seconds of silence before processing
-  const MIN_VOICE_DURATION = 500; // Minimum voice duration to consider valid
-
-  const detectVoiceActivity = (audioData: Float32Array): boolean => {
-    // Calculate RMS (Root Mean Square) for voice activity detection
-    let sum = 0;
-    for (let i = 0; i < audioData.length; i++) {
-      sum += audioData[i] * audioData[i];
-    }
-    const rms = Math.sqrt(sum / audioData.length);
-    
-    // Additional frequency analysis for better voice detection
-    const avgAmplitude = audioData.reduce((acc, val) => acc + Math.abs(val), 0) / audioData.length;
-    
-    // Voice is typically in 85Hz-1100Hz range, check for consistent amplitude
-    return rms > VOICE_THRESHOLD && avgAmplitude > 0.005;
-  };
 
   const startRecording = async () => {
     try {
@@ -64,164 +40,79 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true,
-            sampleRate: 16000,
-            channelCount: 1
+            sampleRate: 16000
           } 
         });
       } else {
-        // System audio requires screen sharing with audio
-        try {
-          stream = await navigator.mediaDevices.getDisplayMedia({ 
-            audio: {
-              echoCancellation: false,
-              noiseSuppression: false,
-              sampleRate: 16000,
-              channelCount: 2
-            },
-            video: true // Required for getDisplayMedia
-          });
-
-          // Check if audio track is available
-          const audioTracks = stream.getAudioTracks();
-          if (audioTracks.length === 0) {
-            // Stop video track since we only need audio
-            stream.getVideoTracks().forEach(track => track.stop());
-            
-            toast({
-              title: "No audio detected",
-              description: "Make sure to check 'Share audio' when sharing your screen. Try again and select a tab/application with audio.",
-              variant: "destructive"
-            });
-            return;
-          }
-
-          // Stop video track since we only need audio for transcription
-          stream.getVideoTracks().forEach(track => track.stop());
-          
-          toast({
-            title: "System audio connected",
-            description: "Successfully capturing system audio for transcription",
-          });
-
-        } catch (screenError) {
-          console.error('Screen sharing error:', screenError);
-          
-          if (screenError.name === 'NotAllowedError') {
-            toast({
-              title: "Screen sharing cancelled",
-              description: "System audio capture requires screen sharing permission. Click the info icon for instructions.",
-              variant: "destructive"
-            });
-          } else {
-            toast({
-              title: "System audio unavailable",
-              description: "Unable to access system audio. Click the info icon for setup instructions.",
-              variant: "destructive"
-            });
-          }
-          return;
-        }
+        // System audio capture via screen sharing
+        stream = await navigator.mediaDevices.getDisplayMedia({ 
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 16000
+          },
+          video: false
+        });
       }
 
       streamRef.current = stream;
       setHasPermission(true);
 
-      // Set up audio analysis for level visualization and voice detection
+      // Set up audio analysis for level visualization
       audioContextRef.current = new AudioContext();
       analyserRef.current = audioContextRef.current.createAnalyser();
       const source = audioContextRef.current.createMediaStreamSource(stream);
       source.connect(analyserRef.current);
       
-      analyserRef.current.fftSize = 2048;
-      analyserRef.current.smoothingTimeConstant = 0.8;
-      const bufferLength = analyserRef.current.fftSize;
-      const dataArray = new Float32Array(bufferLength);
-      const frequencyData = new Uint8Array(analyserRef.current.frequencyBinCount);
+      analyserRef.current.fftSize = 256;
+      const bufferLength = analyserRef.current.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
 
       const updateAudioLevel = () => {
         if (analyserRef.current && isRecording) {
-          // Get time domain data for voice activity detection
-          analyserRef.current.getFloatTimeDomainData(dataArray);
-          
-          // Get frequency data for level visualization
-          analyserRef.current.getByteFrequencyData(frequencyData);
-          const average = frequencyData.reduce((a, b) => a + b) / frequencyData.length;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((a, b) => a + b) / bufferLength;
           onAudioLevel((average / 255) * 100);
-
-          // Voice activity detection
-          const hasVoice = detectVoiceActivity(dataArray);
-          
-          if (hasVoice) {
-            if (!voiceActivityRef.current) {
-              console.log('🎤 Voice detected, will process accumulated audio');
-              voiceActivityRef.current = true;
-              setIsVoiceDetected(true);
-            }
-            
-            // Clear silence timeout when voice is detected
-            if (silenceTimeoutRef.current) {
-              clearTimeout(silenceTimeoutRef.current);
-              silenceTimeoutRef.current = undefined;
-            }
-          } else {
-            // Start silence timer if voice was previously detected
-            if (voiceActivityRef.current && !silenceTimeoutRef.current) {
-              silenceTimeoutRef.current = setTimeout(() => {
-                console.log('🔇 Silence detected, processing collected audio');
-                // Process all accumulated chunks when silence is detected
-                if (pendingChunksRef.current.length > 0) {
-                  const audioBlob = new Blob(pendingChunksRef.current, { type: 'audio/webm' });
-                  sendAudioToWebhook(audioBlob);
-                  pendingChunksRef.current = []; // Clear pending chunks
-                }
-                voiceActivityRef.current = false;
-                setIsVoiceDetected(false);
-                silenceTimeoutRef.current = undefined;
-              }, SILENCE_DURATION);
-            }
-          }
-          
           requestAnimationFrame(updateAudioLevel);
         }
       };
       updateAudioLevel();
 
-      // Set up MediaRecorder for continuous recording
+      // Set up MediaRecorder for chunked recording
       mediaRecorderRef.current = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
+      const audioChunks: Blob[] = [];
+      
       mediaRecorderRef.current.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          // Always collect chunks, but only process them when voice activity is detected
-          pendingChunksRef.current.push(event.data);
-          console.log('📊 Audio chunk collected, pending chunks:', pendingChunksRef.current.length);
+          audioChunks.push(event.data);
         }
       };
 
       mediaRecorderRef.current.onstop = async () => {
-        // Process any remaining chunks when recording stops
-        if (pendingChunksRef.current.length > 0 && voiceActivityRef.current) {
-          const audioBlob = new Blob(pendingChunksRef.current, { type: 'audio/webm' });
+        if (audioChunks.length > 0) {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
           await sendAudioToWebhook(audioBlob);
-          pendingChunksRef.current = [];
         }
       };
 
-      onStartRecording();
       mediaRecorderRef.current.start();
       
-      // Collect chunks every 2 seconds for continuous recording
+      // Send chunks every 3 seconds
       chunkIntervalRef.current = setInterval(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.requestData();
+          mediaRecorderRef.current.stop();
+          mediaRecorderRef.current.start();
         }
-      }, 2000);
+      }, 3000);
+
+      onStartRecording();
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
-        description: "Listening for voice activity..."
+        description: "Audio is being processed in real-time"
       });
 
     } catch (error) {
@@ -242,10 +133,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     if (chunkIntervalRef.current) {
       clearInterval(chunkIntervalRef.current);
     }
-
-    if (silenceTimeoutRef.current) {
-      clearTimeout(silenceTimeoutRef.current);
-    }
     
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -255,10 +142,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       audioContextRef.current.close();
     }
 
-    // Clear pending chunks
-    pendingChunksRef.current = [];
-    voiceActivityRef.current = false;
-    setIsVoiceDetected(false);
     onStopRecording();
     onAudioLevel(0);
     
@@ -270,7 +153,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
   const sendAudioToWebhook = async (audioBlob: Blob, retryCount = 0) => {
     if (!webhookUrl) {
-      onFullTranscription(`[${mode.toUpperCase()}] Simulated transcription at ${new Date().toLocaleTimeString()}`);
+      // Simulate transcription for demo purposes
+      onAudioChunk(`[${mode.toUpperCase()}] Simulated transcription chunk at ${new Date().toLocaleTimeString()}`);
       return;
     }
 
@@ -289,15 +173,20 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         method: 'POST',
         body: formData,
         signal: controller.signal,
+        headers: {
+          // Don't set Content-Type, let browser set it with boundary for FormData
+        }
       });
 
       clearTimeout(timeoutId);
 
       console.log('Webhook response status:', response.status);
+      console.log('Webhook response headers:', Object.fromEntries(response.headers.entries()));
 
       if (response.ok) {
         const responseText = await response.text();
         console.log('Raw webhook response:', responseText);
+        console.log('Response length:', responseText.length);
         
         if (!responseText.trim()) {
           console.log('Empty response from webhook, skipping');
@@ -308,37 +197,69 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           const jsonResponse = JSON.parse(responseText);
           console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
           
+          // Handle currentChunk and fullTranscription separately
+          let currentChunk = '';
+          let fullTranscription = '';
+          
+          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
+            currentChunk = jsonResponse.currentChunk.trim();
+            console.log('✅ Found currentChunk:', currentChunk);
+          }
+          
           if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            const fullTranscription = jsonResponse.fullTranscription.trim();
+            fullTranscription = jsonResponse.fullTranscription.trim();
             console.log('✅ Found fullTranscription:', fullTranscription);
+          }
+          
+          // If we have either chunk or full transcription, process them
+          if (currentChunk || fullTranscription) {
+            console.log('✅ Processing transcription data');
             
-            // Only update transcription if it contains meaningful content
-            if (fullTranscription.length > 10) { // Filter out very short responses
-              toast({
-                title: "Transcription updated",
-                description: `Processed ${fullTranscription.length} characters`,
-                duration: 2000
-              });
-              
+            toast({
+              title: "Transcription received",
+              description: `Processed ${currentChunk ? currentChunk.length : fullTranscription.length} characters`,
+              duration: 2000
+            });
+            
+            // Send currentChunk to chunks (for individual chunk display)
+            if (currentChunk) {
+              let displayChunk = currentChunk;
+              if (jsonResponse.chunkCount || jsonResponse.timestamp) {
+                const metadata = [];
+                if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
+                if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
+                displayChunk = `${currentChunk} [${metadata.join(', ')}]`;
+              }
+              onAudioChunk(displayChunk);
+            }
+            
+            // Send fullTranscription separately (for complete transcription display)
+            if (fullTranscription) {
               onFullTranscription(fullTranscription);
             }
           } else {
-            console.log('❌ No fullTranscription found in response');
+            console.log('❌ No transcription text found in response');
+            console.log('Available fields:', Object.keys(jsonResponse));
+            onAudioChunk(`[DEBUG] Webhook response received but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
           }
         } catch (parseError) {
           // If not JSON, treat as plain text
           console.log('Response is not JSON, treating as plain text:', responseText);
           const plainText = responseText.trim();
-          if (plainText && plainText.length > 10) {
+          if (plainText) {
             console.log('✅ Using plain text response as transcription');
             
             toast({
-              title: "Transcription updated",
+              title: "Transcription received",
               description: `Processed ${plainText.length} characters`,
               duration: 2000
             });
             
+            onAudioChunk(plainText);
             onFullTranscription(plainText);
+          } else {
+            console.log('❌ Plain text response is empty');
+            onAudioChunk(`[DEBUG] Webhook returned empty plain text response`);
           }
         }
       } else {
@@ -351,6 +272,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000 * (retryCount + 1));
           return;
         }
+        
+        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}${errorText ? ' - ' + errorText : ''}`);
       }
     } catch (error) {
       console.error('Error sending audio to webhook:', error);
@@ -361,6 +284,19 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000 * (retryCount + 1));
         return;
       }
+      
+      // Only show fallback after all retries failed
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond (>15s)`);
+        } else if (error.message.includes('Failed to fetch')) {
+          onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL and CORS settings`);
+        } else {
+          onAudioChunk(`[${mode.toUpperCase()}] Connection error: ${error.message}`);
+        }
+      } else {
+        onAudioChunk(`[${mode.toUpperCase()}] Unknown error occurred`);
+      }
     }
   };
 
@@ -368,10 +304,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     if (isRecording) {
       stopRecording();
     } else {
-      if (mode === 'system' && !isRecording) {
-        setShowSystemAudioInfo(true);
-        setTimeout(() => setShowSystemAudioInfo(false), 5000);
-      }
       startRecording();
     }
   };
@@ -395,37 +327,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         {isRecording ? `Stop ${label}` : `Start ${label}`}
       </Button>
       
-      {/* Voice activity indicator */}
-      {isRecording && mode === 'microphone' && (
-        <div className="flex items-center gap-2 text-xs">
-          <div className={`w-2 h-2 rounded-full ${isVoiceDetected ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></div>
-          <span className="text-slate-400">
-            {isVoiceDetected ? 'Voice detected' : 'Listening...'}
-          </span>
-        </div>
-      )}
-      
       <div className="text-center">
-        <div className="flex items-center justify-center gap-2">
-          <p className="text-sm text-slate-400">{label}</p>
-          {mode === 'system' && (
-            <Info 
-              className="w-4 h-4 text-slate-500 cursor-help" 
-              onClick={() => setShowSystemAudioInfo(!showSystemAudioInfo)}
-            />
-          )}
-        </div>
-        
-        {mode === 'system' && showSystemAudioInfo && (
-          <div className="mt-2 p-3 bg-slate-800 rounded-lg border border-slate-600">
-            <p className="text-xs text-slate-300 mb-2 font-medium">To capture system audio:</p>
-            <ol className="text-xs text-slate-400 space-y-1 list-decimal list-inside text-left">
-              <li>Click "Share screen" when prompted</li>
-              <li>Check "Share audio" checkbox</li>
-              <li>Choose the tab/app with audio</li>
-              <li>Click "Share" to start capture</li>
-            </ol>
-          </div>
+        <p className="text-sm text-slate-400">{label}</p>
+        {mode === 'system' && (
+          <p className="text-xs text-slate-500">Requires screen sharing permission</p>
         )}
       </div>
     </div>
