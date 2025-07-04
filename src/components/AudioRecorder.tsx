@@ -197,84 +197,81 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           const jsonResponse = JSON.parse(responseText);
           console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
           
-          // Skip generic status messages that don't contain transcription
-          const genericMessages = [
-            'workflow was started',
-            'request received', 
-            'processing',
-            'accepted',
-            'success',
-            'ok'
-          ];
-          
-          if (jsonResponse.message && 
-              genericMessages.some(msg => 
-                jsonResponse.message.toLowerCase().includes(msg.toLowerCase())
-              )) {
-            console.log('Skipping generic status message:', jsonResponse.message);
-            return;
-          }
-          
-          // Look for transcription text in various possible JSON fields
+          // Check for your specific webhook response format
           let transcriptionText = '';
           
-          // Check common transcription field names
-          const transcriptionFields = [
-            'transcription',
-            'transcript', 
-            'text',
-            'result',
-            'output',
-            'content',
-            'data',
-            'response'
-          ];
-          
-          for (const field of transcriptionFields) {
-            if (jsonResponse[field] && typeof jsonResponse[field] === 'string') {
-              transcriptionText = jsonResponse[field];
-              console.log(`Found transcription in field '${field}':`, transcriptionText);
-              break;
-            }
-          }
-          
-          // If no transcription found in dedicated fields, check message field
-          if (!transcriptionText && jsonResponse.message && 
-              !genericMessages.some(msg => 
-                jsonResponse.message.toLowerCase().includes(msg.toLowerCase())
-              )) {
-            transcriptionText = jsonResponse.message;
-            console.log('Using message field as transcription:', transcriptionText);
-          }
-          
-          // Check for nested objects
-          if (!transcriptionText && jsonResponse.data && typeof jsonResponse.data === 'object') {
+          // Priority order: fullTranscription > currentChunk > other fields
+          if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
+            transcriptionText = jsonResponse.fullTranscription.trim();
+            console.log('✅ Found fullTranscription:', transcriptionText);
+          } else if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
+            transcriptionText = jsonResponse.currentChunk.trim();
+            console.log('✅ Found currentChunk:', transcriptionText);
+          } else {
+            // Fallback to other common transcription field names
+            const transcriptionFields = [
+              'transcription',
+              'transcript', 
+              'text',
+              'result',
+              'output',
+              'content',
+              'data',
+              'response'
+            ];
+            
             for (const field of transcriptionFields) {
-              if (jsonResponse.data[field] && typeof jsonResponse.data[field] === 'string') {
-                transcriptionText = jsonResponse.data[field];
-                console.log(`Found transcription in nested data.${field}:`, transcriptionText);
+              if (jsonResponse[field] && typeof jsonResponse[field] === 'string' && jsonResponse[field].trim()) {
+                transcriptionText = jsonResponse[field].trim();
+                console.log(`✅ Found transcription in field '${field}':`, transcriptionText);
                 break;
               }
             }
           }
           
-          if (transcriptionText && transcriptionText.trim() && transcriptionText.length > 2) {
-            console.log('✅ Extracted transcription text:', transcriptionText);
-            onAudioChunk(transcriptionText);
+          // Accept ANY non-empty transcription text (no length restrictions)
+          if (transcriptionText) {
+            console.log('✅ Processing transcription:', transcriptionText);
+            
+            // Show success feedback
+            toast({
+              title: "Transcription received",
+              description: `Processed ${transcriptionText.length} characters`,
+              duration: 2000
+            });
+            
+            // Add metadata info for debugging
+            let displayText = transcriptionText;
+            if (jsonResponse.chunkCount || jsonResponse.timestamp) {
+              const metadata = [];
+              if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
+              if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
+              displayText = `${transcriptionText} [${metadata.join(', ')}]`;
+            }
+            
+            onAudioChunk(displayText);
           } else {
-            console.log('❌ No meaningful transcription found in JSON response');
+            console.log('❌ No transcription text found in response');
             console.log('Available fields:', Object.keys(jsonResponse));
-            onAudioChunk(`[DEBUG] Webhook returned JSON but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
+            onAudioChunk(`[DEBUG] Webhook response received but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
           }
         } catch (parseError) {
           // If not JSON, treat as plain text
           console.log('Response is not JSON, treating as plain text:', responseText);
-          if (responseText.trim() && responseText.length > 2) {
+          const plainText = responseText.trim();
+          if (plainText) {
             console.log('✅ Using plain text response as transcription');
-            onAudioChunk(responseText);
+            
+            toast({
+              title: "Transcription received",
+              description: `Processed ${plainText.length} characters`,
+              duration: 2000
+            });
+            
+            onAudioChunk(plainText);
           } else {
-            console.log('❌ Plain text response too short or empty');
-            onAudioChunk(`[DEBUG] Webhook returned plain text: "${responseText}"`);
+            console.log('❌ Plain text response is empty');
+            onAudioChunk(`[DEBUG] Webhook returned empty plain text response`);
           }
         }
       } else {
