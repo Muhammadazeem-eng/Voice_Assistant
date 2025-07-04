@@ -58,10 +58,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     try {
       console.log('🎙️ Starting recording in', mode, 'mode');
       
-      // Reset state
+      // Reset state when starting new recording session
       accumulatedTranscriptionRef.current = '';
       setProcessedChunks(0);
       isActivelyRecordingRef.current = true;
+      onFullTranscription(''); // Clear the display
       
       let stream: MediaStream;
       
@@ -348,33 +349,66 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           const jsonResponse = JSON.parse(responseText);
           console.log(`✅ Parsed JSON for chunk #${chunkNumber}:`, JSON.stringify(jsonResponse, null, 2));
           
-          // Only use fullTranscription from webhook response
-          if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            const fullTranscription = jsonResponse.fullTranscription.trim();
-            console.log(`✅ Found fullTranscription #${chunkNumber}:`, fullTranscription);
+          // Handle chunk transcription and accumulation
+          let newChunkText = '';
+          
+          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
+            newChunkText = jsonResponse.currentChunk.trim();
+          } else if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
+            // If webhook only provides fullTranscription, use it as the complete text
+            const fullText = jsonResponse.fullTranscription.trim();
+            console.log(`✅ Using fullTranscription as complete text for chunk #${chunkNumber}`);
+            accumulatedTranscriptionRef.current = fullText;
+            onFullTranscription(fullText);
+            return;
+          }
+          
+          if (newChunkText) {
+            console.log(`✅ New chunk text #${chunkNumber}:`, newChunkText);
             
-            accumulatedTranscriptionRef.current = fullTranscription;
-            onFullTranscription(fullTranscription);
-            
-            toast({
-              title: `Live transcription updated`,
-              description: `Chunk ${chunkNumber} processed`,
-              duration: 2000
-            });
+            // Check if this chunk text is already in the accumulated transcription to avoid duplicates
+            if (!accumulatedTranscriptionRef.current.includes(newChunkText)) {
+              // Append new chunk to accumulated transcription
+              if (accumulatedTranscriptionRef.current) {
+                accumulatedTranscriptionRef.current += ' ' + newChunkText;
+              } else {
+                accumulatedTranscriptionRef.current = newChunkText;
+              }
+              
+              console.log(`✅ Accumulated transcription updated:`, accumulatedTranscriptionRef.current);
+              onFullTranscription(accumulatedTranscriptionRef.current);
+              
+              toast({
+                title: `Live transcription updated`,
+                description: `Added: "${newChunkText}"`,
+                duration: 2000
+              });
+            } else {
+              console.log(`⚠️ Chunk #${chunkNumber} already exists in transcription, skipping duplicate`);
+            }
           }
         } catch (parseError) {
           // Handle plain text response
           const plainText = responseText.trim();
           if (plainText) {
             console.log(`✅ Using plain text for chunk #${chunkNumber}`);
-            accumulatedTranscriptionRef.current = plainText;
-            onFullTranscription(plainText);
             
-            toast({
-              title: `Live transcription updated`,
-              description: `Chunk ${chunkNumber} processed`,
-              duration: 2000
-            });
+            // Check for duplicates in plain text responses too
+            if (!accumulatedTranscriptionRef.current.includes(plainText)) {
+              if (accumulatedTranscriptionRef.current) {
+                accumulatedTranscriptionRef.current += ' ' + plainText;
+              } else {
+                accumulatedTranscriptionRef.current = plainText;
+              }
+              
+              onFullTranscription(accumulatedTranscriptionRef.current);
+              
+              toast({
+                title: `Live transcription updated`,
+                description: `Added: "${plainText}"`,
+                duration: 2000
+              });
+            }
           }
         }
       } else {
