@@ -27,6 +27,8 @@ const Index = () => {
     timestamp: Date;
   }>>([]);
   
+  const [fullTranscription, setFullTranscription] = useState<string>('');
+  
   const [chatMessages, setChatMessages] = useState<Array<{
     id: string;
     role: 'user' | 'assistant';
@@ -75,6 +77,10 @@ const Index = () => {
     setTranscriptionChunks(prev => [...prev, chunk]);
   };
 
+  const updateFullTranscription = (text: string) => {
+    setFullTranscription(text);
+  };
+
   const addChatMessage = (role: 'user' | 'assistant', content: string) => {
     const message = {
       id: Date.now().toString(),
@@ -87,6 +93,7 @@ const Index = () => {
 
   const clearTranscription = () => {
     setTranscriptionChunks([]);
+    setFullTranscription('');
     toast({
       title: "Transcription cleared",
       description: "All transcription data has been removed."
@@ -94,8 +101,8 @@ const Index = () => {
   };
 
   const copyTranscription = () => {
-    const fullText = transcriptionChunks.map(chunk => chunk.text).join(' ');
-    navigator.clipboard.writeText(fullText);
+    const textToCopy = fullTranscription || transcriptionChunks.map(chunk => chunk.text).join(' ');
+    navigator.clipboard.writeText(textToCopy);
     toast({
       title: "Copied to clipboard",
       description: "Full transcription has been copied."
@@ -136,7 +143,6 @@ const Index = () => {
       </div>
 
       <div className="container mx-auto px-4 py-6">
-        {/* Configuration Panel */}
         <ConfigPanel 
           config={config}
           onConfigUpdate={updateConfig}
@@ -158,6 +164,7 @@ const Index = () => {
                   setRecordingMode(null);
                 }}
                 onAudioChunk={addTranscriptionChunk}
+                onFullTranscription={updateFullTranscription}
                 onAudioLevel={setAudioLevel}
                 webhookUrl={config.webhookUrl}
                 mode="microphone"
@@ -174,6 +181,7 @@ const Index = () => {
                   setRecordingMode(null);
                 }}
                 onAudioChunk={addTranscriptionChunk}
+                onFullTranscription={updateFullTranscription}
                 onAudioLevel={setAudioLevel}
                 webhookUrl={config.webhookUrl}
                 mode="system"
@@ -214,7 +222,7 @@ const Index = () => {
                   variant="outline"
                   size="sm"
                   onClick={copyTranscription}
-                  disabled={transcriptionChunks.length === 0}
+                  disabled={!fullTranscription && transcriptionChunks.length === 0}
                   className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Copy className="w-4 h-4 mr-2" />
@@ -224,7 +232,7 @@ const Index = () => {
                   variant="outline"
                   size="sm"
                   onClick={clearTranscription}
-                  disabled={transcriptionChunks.length === 0}
+                  disabled={!fullTranscription && transcriptionChunks.length === 0}
                   className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
@@ -235,6 +243,7 @@ const Index = () => {
             
             <TranscriptionDisplay
               chunks={transcriptionChunks}
+              fullTranscription={fullTranscription}
               isRecording={isRecording}
             />
           </div>
@@ -246,7 +255,7 @@ const Index = () => {
               messages={chatMessages}
               onSendMessage={addChatMessage}
               apiKey={config.openaiApiKey}
-              transcriptionText={transcriptionChunks.map(chunk => chunk.text).join(' ')}
+              transcriptionText={fullTranscription || transcriptionChunks.map(chunk => chunk.text).join(' ')}
             />
           </div>
         </div>

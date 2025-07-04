@@ -13,10 +13,15 @@ interface TranscriptionChunk {
 
 interface TranscriptionDisplayProps {
   chunks: TranscriptionChunk[];
+  fullTranscription: string;
   isRecording: boolean;
 }
 
-const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({ chunks, isRecording }) => {
+const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({ 
+  chunks, 
+  fullTranscription, 
+  isRecording 
+}) => {
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString('en-US', { 
       hour12: false,
@@ -26,11 +31,9 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({ chunks, isR
     });
   };
 
-  const fullTranscription = chunks.map(chunk => chunk.text).join(' ');
-
   return (
     <div className="space-y-4">
-      {/* Full Transcription View */}
+      {/* Complete Transcription View */}
       <Card className="bg-slate-900/50 border-slate-700">
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
@@ -44,7 +47,7 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({ chunks, isR
                   {isRecording ? 'Listening for audio...' : 'No transcription yet. Start recording to see text appear here.'}
                 </span>
               )}
-              {isRecording && (
+              {isRecording && fullTranscription && (
                 <span className="inline-block w-2 h-4 bg-slate-400 ml-1 animate-pulse" />
               )}
             </div>
@@ -52,10 +55,30 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({ chunks, isR
         </div>
       </Card>
 
-      {/* Individual Chunks */}
+      {/* Current Chunk Display */}
+      {chunks.length > 0 && (
+        <Card className="bg-slate-900/50 border-slate-700">
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-medium text-slate-200">Latest Chunk</h4>
+              <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
+                #{chunks.length}
+              </Badge>
+            </div>
+            <div className="text-slate-300 text-sm leading-relaxed p-3 bg-slate-800/50 rounded-md">
+              {chunks[chunks.length - 1].text}
+              <div className="text-xs text-slate-500 mt-2">
+                {formatTime(chunks[chunks.length - 1].timestamp)}
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Chunk History */}
       <Card className="bg-slate-900/50 border-slate-700">
         <div className="p-4">
-          <h4 className="font-medium text-slate-200 mb-3">Transcription Chunks</h4>
+          <h4 className="font-medium text-slate-200 mb-3">Chunk History</h4>
           <ScrollArea className="h-64">
             {chunks.length === 0 ? (
               <div className="text-slate-500 italic text-sm text-center py-8">

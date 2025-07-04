@@ -8,6 +8,7 @@ interface AudioRecorderProps {
   onStartRecording: () => void;
   onStopRecording: () => void;
   onAudioChunk: (text: string) => void;
+  onFullTranscription: (text: string) => void;
   onAudioLevel: (level: number) => void;
   webhookUrl: string;
   mode: 'microphone' | 'system';
@@ -18,6 +19,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   onStartRecording,
   onStopRecording,
   onAudioChunk,
+  onFullTranscription,
   onAudioLevel,
   webhookUrl,
   mode
@@ -165,7 +167,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       console.log('Audio blob size:', audioBlob.size, 'bytes');
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const response = await fetch(webhookUrl, {
         method: 'POST',
@@ -186,70 +188,55 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         console.log('Raw webhook response:', responseText);
         console.log('Response length:', responseText.length);
         
-        // Skip empty responses
         if (!responseText.trim()) {
           console.log('Empty response from webhook, skipping');
           return;
         }
         
-        // Try to parse as JSON first
         try {
           const jsonResponse = JSON.parse(responseText);
           console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
           
-          // Check for your specific webhook response format
-          let transcriptionText = '';
+          // Handle currentChunk and fullTranscription separately
+          let currentChunk = '';
+          let fullTranscription = '';
           
-          // Priority order: fullTranscription > currentChunk > other fields
-          if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            transcriptionText = jsonResponse.fullTranscription.trim();
-            console.log('✅ Found fullTranscription:', transcriptionText);
-          } else if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
-            transcriptionText = jsonResponse.currentChunk.trim();
-            console.log('✅ Found currentChunk:', transcriptionText);
-          } else {
-            // Fallback to other common transcription field names
-            const transcriptionFields = [
-              'transcription',
-              'transcript', 
-              'text',
-              'result',
-              'output',
-              'content',
-              'data',
-              'response'
-            ];
-            
-            for (const field of transcriptionFields) {
-              if (jsonResponse[field] && typeof jsonResponse[field] === 'string' && jsonResponse[field].trim()) {
-                transcriptionText = jsonResponse[field].trim();
-                console.log(`✅ Found transcription in field '${field}':`, transcriptionText);
-                break;
-              }
-            }
+          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
+            currentChunk = jsonResponse.currentChunk.trim();
+            console.log('✅ Found currentChunk:', currentChunk);
           }
           
-          // Accept ANY non-empty transcription text (no length restrictions)
-          if (transcriptionText) {
-            console.log('✅ Processing transcription:', transcriptionText);
+          if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
+            fullTranscription = jsonResponse.fullTranscription.trim();
+            console.log('✅ Found fullTranscription:', fullTranscription);
+          }
+          
+          // If we have either chunk or full transcription, process them
+          if (currentChunk || fullTranscription) {
+            console.log('✅ Processing transcription data');
             
-            // Show success feedback
             toast({
               title: "Transcription received",
-              description: `Processed ${transcriptionText.length} characters`,
+              description: `Processed ${currentChunk ? currentChunk.length : fullTranscription.length} characters`,
               duration: 2000
             });
             
-            // Add metadata info for debugging
-            let displayText = transcriptionText;
-            if (jsonResponse.chunkCount || jsonResponse.timestamp) {
-              const metadata = [];
-              if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
-              if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
-              displayText = `${transcriptionText} [${metadata.join(', ')}]`;
+            // Send currentChunk to chunks (for individual chunk display)
+            if (currentChunk) {
+              let displayChunk = currentChunk;
+              if (jsonResponse.chunkCount || jsonResponse.timestamp) {
+                const metadata = [];
+                if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
+                if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
+                displayChunk = `${currentChunk} [${metadata.join(', ')}]`;
+              }
+              onAudioChunk(displayChunk);
             }
             
-            onAudioChunk(displayText);
+            // Send fullTranscription separately (for complete transcription display)
+            if (fullTranscription) {
+              onFullTranscription(fullTranscription);
+            }
           } else {
             console.log('❌ No transcription text found in response');
             console.log('Available fields:', Object.keys(jsonResponse));
@@ -269,6 +256,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             });
             
             onAudioChunk(plainText);
+            onFullTranscription(plainText);
           } else {
             console.log('❌ Plain text response is empty');
             onAudioChunk(`[DEBUG] Webhook returned empty plain text response`);
