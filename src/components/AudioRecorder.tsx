@@ -29,7 +29,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunkIntervalRef = useRef<NodeJS.Timeout>();
 
   const startRecording = async () => {
     try {
@@ -78,41 +77,31 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       };
       updateAudioLevel();
 
-      // Set up MediaRecorder for chunked recording
+      // Set up MediaRecorder for real-time chunking
       mediaRecorderRef.current = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
-      const audioChunks: Blob[] = [];
-      
-      mediaRecorderRef.current.ondataavailable = (event) => {
+      mediaRecorderRef.current.ondataavailable = async (event) => {
         if (event.data.size > 0) {
-          audioChunks.push(event.data);
+          console.log(`📦 Audio chunk ready: ${event.data.size} bytes`);
+          await sendAudioToWebhook(event.data);
         }
       };
 
-      mediaRecorderRef.current.onstop = async () => {
-        if (audioChunks.length > 0) {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          await sendAudioToWebhook(audioBlob);
-        }
+      mediaRecorderRef.current.onstop = () => {
+        console.log('MediaRecorder stopped');
       };
 
-      mediaRecorderRef.current.start();
-      
-      // Send chunks every 3 seconds
-      chunkIntervalRef.current = setInterval(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
-          mediaRecorderRef.current.start();
-        }
-      }, 3000);
+      // Start recording with 2.5-second chunks
+      mediaRecorderRef.current.start(2500); // 2.5 seconds per chunk
+      console.log('🎤 Started recording with 2.5-second chunks');
 
       onStartRecording();
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
-        description: "Audio is being processed in real-time"
+        description: "Audio is being processed in real-time chunks"
       });
 
     } catch (error) {
@@ -128,10 +117,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const stopRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
-    }
-    
-    if (chunkIntervalRef.current) {
-      clearInterval(chunkIntervalRef.current);
     }
     
     if (streamRef.current) {
@@ -154,7 +139,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const sendAudioToWebhook = async (audioBlob: Blob, retryCount = 0) => {
     if (!webhookUrl) {
       // Simulate transcription for demo purposes
-      onAudioChunk(`[${mode.toUpperCase()}] Simulated transcription chunk at ${new Date().toLocaleTimeString()}`);
+      onAudioChunk(`[${mode.toUpperCase()}] Simulated chunk at ${new Date().toLocaleTimeString()}`);
       return;
     }
 
@@ -163,8 +148,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('audio', audioBlob, 'audio.webm');
       formData.append('source', mode);
 
-      console.log('Sending audio to webhook:', webhookUrl);
-      console.log('Audio blob size:', audioBlob.size, 'bytes');
+      console.log('🚀 Sending audio chunk to webhook:', webhookUrl);
+      console.log('📊 Chunk size:', audioBlob.size, 'bytes');
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -180,122 +165,101 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       clearTimeout(timeoutId);
 
-      console.log('Webhook response status:', response.status);
-      console.log('Webhook response headers:', Object.fromEntries(response.headers.entries()));
+      console.log('📡 Webhook response status:', response.status);
 
       if (response.ok) {
         const responseText = await response.text();
-        console.log('Raw webhook response:', responseText);
-        console.log('Response length:', responseText.length);
+        console.log('📝 Raw webhook response:', responseText);
         
         if (!responseText.trim()) {
-          console.log('Empty response from webhook, skipping');
+          console.log('⚠️ Empty response from webhook');
           return;
         }
         
         try {
-          const jsonResponse = JSON.parse(responseText);
-          console.log('Parsed JSON response:', JSON.stringify(jsonResponse, null, 2));
+          const data = JSON.parse(responseText);
+          console.log('✅ Parsed webhook response:', data);
           
-          // Handle currentChunk and fullTranscription separately
-          let currentChunk = '';
-          let fullTranscription = '';
+          // Extract transcription data
+          const currentChunk = data.currentChunk?.trim() || '';
+          const fullTranscription = data.fullTranscription?.trim() || '';
           
-          if (jsonResponse.currentChunk && typeof jsonResponse.currentChunk === 'string' && jsonResponse.currentChunk.trim()) {
-            currentChunk = jsonResponse.currentChunk.trim();
-            console.log('✅ Found currentChunk:', currentChunk);
-          }
-          
-          if (jsonResponse.fullTranscription && typeof jsonResponse.fullTranscription === 'string' && jsonResponse.fullTranscription.trim()) {
-            fullTranscription = jsonResponse.fullTranscription.trim();
-            console.log('✅ Found fullTranscription:', fullTranscription);
-          }
-          
-          // If we have either chunk or full transcription, process them
           if (currentChunk || fullTranscription) {
-            console.log('✅ Processing transcription data');
+            console.log('🎯 Processing transcription data');
             
+            // Show success toast
             toast({
-              title: "Transcription received",
-              description: `Processed ${currentChunk ? currentChunk.length : fullTranscription.length} characters`,
-              duration: 2000
+              title: "Chunk processed",
+              description: `Received ${currentChunk ? currentChunk.length : fullTranscription.length} characters`,
+              duration: 1500
             });
             
-            // Send currentChunk to chunks (for individual chunk display)
+            // Send currentChunk if available (for individual chunks)
             if (currentChunk) {
-              let displayChunk = currentChunk;
-              if (jsonResponse.chunkCount || jsonResponse.timestamp) {
-                const metadata = [];
-                if (jsonResponse.chunkCount) metadata.push(`Chunk ${jsonResponse.chunkCount}`);
-                if (jsonResponse.timestamp) metadata.push(new Date(jsonResponse.timestamp).toLocaleTimeString());
-                displayChunk = `${currentChunk} [${metadata.join(', ')}]`;
-              }
-              onAudioChunk(displayChunk);
+              console.log('📤 Sending currentChunk to display:', currentChunk);
+              onAudioChunk(currentChunk);
             }
             
-            // Send fullTranscription separately (for complete transcription display)
+            // Send fullTranscription if available (for complete text)
             if (fullTranscription) {
+              console.log('📤 Sending fullTranscription to display:', fullTranscription);
               onFullTranscription(fullTranscription);
             }
           } else {
-            console.log('❌ No transcription text found in response');
-            console.log('Available fields:', Object.keys(jsonResponse));
-            onAudioChunk(`[DEBUG] Webhook response received but no transcription text found. Available fields: ${Object.keys(jsonResponse).join(', ')}`);
+            console.log('❌ No transcription text found');
+            onAudioChunk(`[DEBUG] No transcription in response: ${Object.keys(data).join(', ')}`);
           }
         } catch (parseError) {
-          // If not JSON, treat as plain text
-          console.log('Response is not JSON, treating as plain text:', responseText);
+          // Handle plain text response
           const plainText = responseText.trim();
           if (plainText) {
-            console.log('✅ Using plain text response as transcription');
-            
-            toast({
-              title: "Transcription received",
-              description: `Processed ${plainText.length} characters`,
-              duration: 2000
-            });
-            
+            console.log('📝 Using plain text response:', plainText);
             onAudioChunk(plainText);
             onFullTranscription(plainText);
+            
+            toast({
+              title: "Chunk processed",
+              description: `Received ${plainText.length} characters`,
+              duration: 1500
+            });
           } else {
-            console.log('❌ Plain text response is empty');
-            onAudioChunk(`[DEBUG] Webhook returned empty plain text response`);
+            console.log('❌ Empty plain text response');
           }
         }
       } else {
         const errorText = await response.text();
-        console.error('Webhook error:', response.status, response.statusText, errorText);
+        console.error('❌ Webhook error:', response.status, response.statusText, errorText);
         
         // Retry on server errors (5xx) up to 2 times
         if (response.status >= 500 && retryCount < 2) {
-          console.log(`Retrying request due to server error (attempt ${retryCount + 1})`);
+          console.log(`🔄 Retrying due to server error (attempt ${retryCount + 1})`);
           setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000 * (retryCount + 1));
           return;
         }
         
-        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}${errorText ? ' - ' + errorText : ''}`);
+        onAudioChunk(`[ERROR] Webhook ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
-      console.error('Error sending audio to webhook:', error);
+      console.error('❌ Error sending chunk to webhook:', error);
       
       // Retry on network errors up to 2 times
       if (retryCount < 2) {
-        console.log(`Retrying after network error (attempt ${retryCount + 1})`);
+        console.log(`🔄 Retrying after network error (attempt ${retryCount + 1})`);
         setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000 * (retryCount + 1));
         return;
       }
       
-      // Only show fallback after all retries failed
+      // Show error after all retries failed
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
-          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond (>15s)`);
+          onAudioChunk(`[${mode.toUpperCase()}] Chunk timeout (>15s)`);
         } else if (error.message.includes('Failed to fetch')) {
-          onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL and CORS settings`);
+          onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL`);
         } else {
-          onAudioChunk(`[${mode.toUpperCase()}] Connection error: ${error.message}`);
+          onAudioChunk(`[${mode.toUpperCase()}] Error: ${error.message}`);
         }
       } else {
-        onAudioChunk(`[${mode.toUpperCase()}] Unknown error occurred`);
+        onAudioChunk(`[${mode.toUpperCase()}] Unknown error`);
       }
     }
   };
@@ -331,6 +295,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         <p className="text-sm text-slate-400">{label}</p>
         {mode === 'system' && (
           <p className="text-xs text-slate-500">Requires screen sharing permission</p>
+        )}
+        {isRecording && (
+          <p className="text-xs text-green-400">Sending 2.5s chunks</p>
         )}
       </div>
     </div>
