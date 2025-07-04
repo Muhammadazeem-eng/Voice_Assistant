@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
@@ -162,23 +161,56 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('audio', audioBlob, 'audio.webm');
       formData.append('source', mode);
 
+      console.log('Sending audio to webhook:', webhookUrl);
       const response = await fetch(webhookUrl, {
         method: 'POST',
         body: formData
       });
 
       if (response.ok) {
-        const result = await response.text();
-        if (result.trim()) {
-          onAudioChunk(result);
+        const responseText = await response.text();
+        console.log('Webhook response:', responseText);
+        
+        // Try to parse as JSON first
+        try {
+          const jsonResponse = JSON.parse(responseText);
+          console.log('Parsed JSON response:', jsonResponse);
+          
+          // Extract transcription text from various possible JSON structures
+          let transcriptionText = '';
+          
+          if (jsonResponse.transcription) {
+            transcriptionText = jsonResponse.transcription;
+          } else if (jsonResponse.text) {
+            transcriptionText = jsonResponse.text;
+          } else if (jsonResponse.result) {
+            transcriptionText = jsonResponse.result;
+          } else if (jsonResponse.message && jsonResponse.message !== "Workflow was started") {
+            transcriptionText = jsonResponse.message;
+          }
+          
+          if (transcriptionText && transcriptionText.trim()) {
+            console.log('Extracted transcription:', transcriptionText);
+            onAudioChunk(transcriptionText);
+          } else {
+            console.log('No transcription found in JSON response, using raw response');
+            onAudioChunk(responseText);
+          }
+        } catch (parseError) {
+          // If not JSON, treat as plain text
+          console.log('Response is not JSON, treating as plain text:', responseText);
+          if (responseText.trim()) {
+            onAudioChunk(responseText);
+          }
         }
       } else {
-        console.error('Webhook error:', response.statusText);
+        console.error('Webhook error:', response.status, response.statusText);
+        onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
       console.error('Error sending audio to webhook:', error);
       // Fallback to simulated transcription
-      onAudioChunk(`[${mode.toUpperCase()}] Transcription chunk processed at ${new Date().toLocaleTimeString()}`);
+      onAudioChunk(`[${mode.toUpperCase()}] Connection error - simulated transcription at ${new Date().toLocaleTimeString()}`);
     }
   };
 
