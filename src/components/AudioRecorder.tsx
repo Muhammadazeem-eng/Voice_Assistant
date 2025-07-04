@@ -38,8 +38,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       'audio/wav',
       'audio/mpeg',
       'audio/mp4',
-      'audio/webm;codecs=opus',
-      'audio/webm'
+      'audio/webm',
+      'audio/ogg'
     ];
     
     for (const type of types) {
