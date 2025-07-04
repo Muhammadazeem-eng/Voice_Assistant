@@ -32,19 +32,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const chunkingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Function to get supported audio format
+  // Function to get supported audio format - prefer webm for recording
   const getSupportedMimeType = () => {
     const types = [
-      'audio/wav',
-      'audio/mpeg',
-      'audio/mp4',
       'audio/webm',
-      'audio/ogg'
+      'audio/mp4',
+      'audio/mpeg'
     ];
     
     for (const type of types) {
       if (MediaRecorder.isTypeSupported(type)) {
-        console.log(`✅ Using supported audio format: ${type}`);
+        console.log(`✅ Using supported audio format for recording: ${type}`);
         return type;
       }
     }
@@ -53,34 +51,40 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     return '';
   };
 
-  // Function to convert audio blob to WAV format
+  // Function to convert any audio blob to WAV format for OpenAI
   const convertToWav = async (audioBlob: Blob): Promise<Blob> => {
     try {
-      // If it's already WAV, return as is
-      if (audioBlob.type.includes('wav')) {
-        return audioBlob;
-      }
-
+      console.log(`🔄 Converting ${audioBlob.type} (${audioBlob.size} bytes) to WAV for OpenAI`);
+      
       // Create audio context for conversion
-      const audioContext = new AudioContext();
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000 // OpenAI prefers 16kHz
+      });
+      
       const arrayBuffer = await audioBlob.arrayBuffer();
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
       
       // Convert to WAV
       const wavBuffer = audioBufferToWav(audioBuffer);
-      return new Blob([wavBuffer], { type: 'audio/wav' });
+      const wavBlob = new Blob([wavBuffer], { type: 'audio/wav' });
+      
+      console.log(`✅ Converted to WAV: ${wavBlob.size} bytes`);
+      await audioContext.close();
+      
+      return wavBlob;
     } catch (error) {
-      console.log('⚠️ Audio conversion failed, using original format:', error);
+      console.error('❌ Audio conversion failed:', error);
+      // Return original if conversion fails
       return audioBlob;
     }
   };
 
-  // Helper function to convert AudioBuffer to WAV
+  // Helper function to convert AudioBuffer to WAV with proper 16-bit PCM format
   const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
     const length = buffer.length;
-    const numberOfChannels = buffer.numberOfChannels;
+    const numberOfChannels = 1; // Force mono for OpenAI
     const sampleRate = buffer.sampleRate;
-    const bytesPerSample = 2;
+    const bytesPerSample = 2; // 16-bit
     const blockAlign = numberOfChannels * bytesPerSample;
     const byteRate = sampleRate * blockAlign;
     const dataSize = length * blockAlign;
@@ -95,29 +99,34 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       }
     };
     
+    // RIFF header
     writeString(0, 'RIFF');
     view.setUint32(4, 36 + dataSize, true);
     writeString(8, 'WAVE');
+    
+    // fmt chunk
     writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
+    view.setUint32(16, 16, true); // PCM format
+    view.setUint16(20, 1, true);  // PCM
     view.setUint16(22, numberOfChannels, true);
     view.setUint32(24, sampleRate, true);
     view.setUint32(28, byteRate, true);
     view.setUint16(32, blockAlign, true);
-    view.setUint16(34, 16, true);
+    view.setUint16(34, 16, true); // 16-bit
+    
+    // data chunk
     writeString(36, 'data');
     view.setUint32(40, dataSize, true);
     
-    // Convert audio data
+    // Convert audio data to mono 16-bit PCM
+    const channelData = buffer.getChannelData(0); // Use first channel only
     let offset = 44;
-    for (let channel = 0; channel < numberOfChannels; channel++) {
-      const channelData = buffer.getChannelData(channel);
-      for (let i = 0; i < length; i++) {
-        const sample = Math.max(-1, Math.min(1, channelData[i]));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-        offset += 2;
-      }
+    
+    for (let i = 0; i < length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i]));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, intSample, true);
+      offset += 2;
     }
     
     return arrayBuffer;
@@ -214,11 +223,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       mediaRecorder.onstop = async () => {
         if (audioChunks.length > 0) {
           const audioBlob = new Blob(audioChunks, { type: mimeType });
-          console.log(`📦 Audio chunk ready: ${audioBlob.size} bytes (${mimeType})`);
+          console.log(`📦 Raw audio chunk: ${audioBlob.size} bytes (${mimeType})`);
           
-          // Convert to WAV if needed
-          const finalBlob = await convertToWav(audioBlob);
-          await sendAudioToWebhook(finalBlob);
+          // ALWAYS convert to WAV for OpenAI compatibility
+          const wavBlob = await convertToWav(audioBlob);
+          console.log(`🎯 Sending WAV chunk: ${wavBlob.size} bytes`);
+          
+          await sendAudioToWebhook(wavBlob);
         }
         
         // Start next chunk if still recording
