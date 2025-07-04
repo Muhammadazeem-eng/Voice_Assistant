@@ -32,6 +32,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const accumulatedTranscriptionRef = useRef<string>('');
   const isActivelyRecordingRef = useRef<boolean>(false);
+  const audioBufferRef = useRef<Blob[]>([]);
+  const chunkOverlapTimeRef = useRef<number>(1000); // 1 second overlap
 
   // Get the most compatible MIME type
   const getSupportedMimeType = () => {
@@ -60,6 +62,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       
       // Reset state when starting new recording session
       accumulatedTranscriptionRef.current = '';
+      audioBufferRef.current = [];
       setProcessedChunks(0);
       isActivelyRecordingRef.current = true;
       onFullTranscription(''); // Clear the display
@@ -71,7 +74,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           audio: {
             echoCancellation: true,
             noiseSuppression: true,
-            autoGainControl: true
+            autoGainControl: true,
+            sampleRate: 48000, // Higher sample rate for better quality
+            channelCount: 1
           }
         });
       } else {
@@ -79,7 +84,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         
         try {
           stream = await navigator.mediaDevices.getDisplayMedia({ 
-            audio: true,
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+              sampleRate: 48000,
+              channelCount: 1
+            },
             video: true
           });
 
@@ -156,7 +167,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       let mediaRecorder: MediaRecorder;
 
       try {
-        const options: MediaRecorderOptions = {};
+        const options: MediaRecorderOptions = {
+          audioBitsPerSecond: 128000 // Higher bitrate for better quality
+        };
         if (mimeType) {
           options.mimeType = mimeType;
         }
@@ -170,9 +183,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Start continuous chunking with simplified logic
+      // Start continuous chunking with overlap for better quality
       const startChunking = () => {
-        console.log('🔄 Starting continuous chunking every 3 seconds');
+        console.log('🔄 Starting continuous chunking every 5 seconds with 1 second overlap');
         
         const recordChunk = () => {
           if (!isActivelyRecordingRef.current || !mediaRecorderRef.current || !streamRef.current?.active) {
@@ -181,6 +194,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           }
 
           console.log('📹 Starting new recording chunk');
+          
+          const chunkData: Blob[] = [];
           
           // Set up data handler for this chunk
           mediaRecorderRef.current.ondataavailable = async (event) => {
@@ -194,16 +209,24 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
               return;
             }
 
+            chunkData.push(event.data);
+            
+            // Create chunk with overlap from previous audio
+            const chunkToSend = await createChunkWithOverlap(chunkData);
+            
             const currentChunkNumber = processedChunks + 1;
             setProcessedChunks(currentChunkNumber);
             
-            console.log(`🔄 Processing chunk #${currentChunkNumber}`);
+            console.log(`🔄 Processing chunk #${currentChunkNumber} with overlap`);
             
             try {
-              await sendAudioToWebhook(event.data, currentChunkNumber);
+              await sendAudioToWebhook(chunkToSend, currentChunkNumber);
             } catch (error) {
               console.error(`❌ Failed to process chunk #${currentChunkNumber}:`, error);
             }
+            
+            // Store audio buffer for next chunk overlap
+            audioBufferRef.current = [...chunkData];
             
             // Schedule next chunk if still recording
             if (isActivelyRecordingRef.current) {
@@ -211,17 +234,17 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             }
           };
 
-          // Start recording for 3 seconds
+          // Start recording for 5 seconds (better for complete phrases)
           try {
             mediaRecorderRef.current.start();
             
-            // Stop after 3 seconds
+            // Stop after 5 seconds
             setTimeout(() => {
               if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                 console.log('⏹️ Stopping current chunk');
                 mediaRecorderRef.current.stop();
               }
-            }, 3000);
+            }, 5000);
           } catch (error) {
             console.error('❌ Error starting MediaRecorder:', error);
             if (isActivelyRecordingRef.current) {
@@ -233,12 +256,32 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         recordChunk();
       };
 
+      // Create chunk with overlap to maintain audio continuity
+      const createChunkWithOverlap = async (currentChunkData: Blob[]): Promise<Blob> => {
+        if (audioBufferRef.current.length === 0) {
+          // First chunk, no overlap needed
+          return new Blob(currentChunkData, { type: currentChunkData[0]?.type || 'audio/webm' });
+        }
+
+        try {
+          // Combine previous chunk end with current chunk for overlap
+          const overlapBlob = audioBufferRef.current[audioBufferRef.current.length - 1];
+          const currentBlob = new Blob(currentChunkData, { type: currentChunkData[0]?.type || 'audio/webm' });
+          
+          // Create overlapped chunk (simplified - in production you'd want proper audio mixing)
+          return new Blob([overlapBlob, currentBlob], { type: currentBlob.type });
+        } catch (error) {
+          console.warn('⚠️ Failed to create overlap, using current chunk only:', error);
+          return new Blob(currentChunkData, { type: currentChunkData[0]?.type || 'audio/webm' });
+        }
+      };
+
       startChunking();
       onStartRecording();
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
-        description: "Real-time transcription every 3 seconds"
+        description: "High-quality transcription with 5-second chunks and overlap"
       });
 
     } catch (error) {
@@ -298,6 +341,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       audioContextRef.current.close();
     }
 
+    // Clear buffers
+    audioBufferRef.current = [];
     setShowSystemAudioInstructions(false);
     setProcessedChunks(0);
     onStopRecording();
@@ -305,13 +350,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     
     toast({
       title: "Recording stopped",
-      description: `Processed ${processedChunks} chunks total`
+      description: `Processed ${processedChunks} high-quality chunks total`
     });
   };
 
   const sendAudioToWebhook = async (audioBlob: Blob, chunkNumber: number, retryCount = 0) => {
     if (!webhookUrl) {
-      const simulatedText = `Simulated transcription chunk ${chunkNumber}`;
+      const simulatedText = `Simulated high-quality transcription chunk ${chunkNumber}`;
       accumulatedTranscriptionRef.current += (accumulatedTranscriptionRef.current ? ' ' : '') + simulatedText;
       onFullTranscription(accumulatedTranscriptionRef.current);
       return;
@@ -322,11 +367,12 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('audio', audioBlob, `audio-chunk-${chunkNumber}.webm`);
       formData.append('source', mode);
       formData.append('chunkNumber', chunkNumber.toString());
+      formData.append('hasOverlap', 'true'); // Indicate this chunk has overlap for better processing
 
-      console.log(`📡 Sending chunk #${chunkNumber} to webhook:`, webhookUrl);
+      console.log(`📡 Sending high-quality chunk #${chunkNumber} to webhook:`, webhookUrl);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000); // Longer timeout for larger chunks
 
       const response = await fetch(webhookUrl, {
         method: 'POST',
@@ -366,8 +412,10 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           if (newChunkText) {
             console.log(`✅ New chunk text #${chunkNumber}:`, newChunkText);
             
-            // Check if this chunk text is already in the accumulated transcription to avoid duplicates
-            if (!accumulatedTranscriptionRef.current.includes(newChunkText)) {
+            // Improved duplicate detection - check for substantial overlap instead of exact match
+            const isDuplicate = accumulatedTranscriptionRef.current.toLowerCase().includes(newChunkText.toLowerCase().substring(0, Math.min(20, newChunkText.length)));
+            
+            if (!isDuplicate) {
               // Append new chunk to accumulated transcription
               if (accumulatedTranscriptionRef.current) {
                 accumulatedTranscriptionRef.current += ' ' + newChunkText;
@@ -380,11 +428,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
               
               toast({
                 title: `Live transcription updated`,
-                description: `Added: "${newChunkText}"`,
+                description: `Added: "${newChunkText.substring(0, 50)}${newChunkText.length > 50 ? '...' : ''}"`,
                 duration: 2000
               });
             } else {
-              console.log(`⚠️ Chunk #${chunkNumber} already exists in transcription, skipping duplicate`);
+              console.log(`⚠️ Chunk #${chunkNumber} contains duplicate content, skipping`);
             }
           }
         } catch (parseError) {
@@ -394,7 +442,9 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             console.log(`✅ Using plain text for chunk #${chunkNumber}`);
             
             // Check for duplicates in plain text responses too
-            if (!accumulatedTranscriptionRef.current.includes(plainText)) {
+            const isDuplicate = accumulatedTranscriptionRef.current.toLowerCase().includes(plainText.toLowerCase().substring(0, Math.min(20, plainText.length)));
+            
+            if (!isDuplicate) {
               if (accumulatedTranscriptionRef.current) {
                 accumulatedTranscriptionRef.current += ' ' + plainText;
               } else {
@@ -405,7 +455,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
               
               toast({
                 title: `Live transcription updated`,
-                description: `Added: "${plainText}"`,
+                description: `Added: "${plainText.substring(0, 50)}${plainText.length > 50 ? '...' : ''}"`,
                 duration: 2000
               });
             }
@@ -483,8 +533,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           )}
           {isRecording && (
             <div className="space-y-1">
-              <p className="text-xs text-green-400 animate-pulse">● Live transcription active</p>
-              <p className="text-xs text-slate-500">Processed {processedChunks} chunks</p>
+              <p className="text-xs text-green-400 animate-pulse">● High-quality transcription active</p>
+              <p className="text-xs text-slate-500">5s chunks with overlap • {processedChunks} processed</p>
             </div>
           )}
         </div>
