@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff } from 'lucide-react';
@@ -149,7 +150,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     });
   };
 
-  const sendAudioToWebhook = async (audioBlob: Blob) => {
+  const sendAudioToWebhook = async (audioBlob: Blob, retryCount = 0) => {
     if (!webhookUrl) {
       // Simulate transcription for demo purposes
       onAudioChunk(`[${mode.toUpperCase()}] Simulated transcription chunk at ${new Date().toLocaleTimeString()}`);
@@ -162,19 +163,48 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       formData.append('source', mode);
 
       console.log('Sending audio to webhook:', webhookUrl);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
       const response = await fetch(webhookUrl, {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         const responseText = await response.text();
         console.log('Webhook response:', responseText);
         
+        // Skip empty responses
+        if (!responseText.trim()) {
+          console.log('Empty response from webhook, skipping');
+          return;
+        }
+        
         // Try to parse as JSON first
         try {
           const jsonResponse = JSON.parse(responseText);
           console.log('Parsed JSON response:', jsonResponse);
+          
+          // Skip generic status messages
+          const genericMessages = [
+            'workflow was started',
+            'request received',
+            'processing',
+            'accepted'
+          ];
+          
+          if (jsonResponse.message && 
+              genericMessages.some(msg => 
+                jsonResponse.message.toLowerCase().includes(msg.toLowerCase())
+              )) {
+            console.log('Skipping generic status message:', jsonResponse.message);
+            return;
+          }
           
           // Extract transcription text from various possible JSON structures
           let transcriptionText = '';
@@ -185,32 +215,61 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             transcriptionText = jsonResponse.text;
           } else if (jsonResponse.result) {
             transcriptionText = jsonResponse.result;
-          } else if (jsonResponse.message && jsonResponse.message !== "Workflow was started") {
+          } else if (jsonResponse.data) {
+            transcriptionText = jsonResponse.data;
+          } else if (jsonResponse.content) {
+            transcriptionText = jsonResponse.content;
+          } else if (jsonResponse.message) {
             transcriptionText = jsonResponse.message;
           }
           
-          if (transcriptionText && transcriptionText.trim()) {
+          if (transcriptionText && transcriptionText.trim() && transcriptionText.length > 2) {
             console.log('Extracted transcription:', transcriptionText);
             onAudioChunk(transcriptionText);
           } else {
-            console.log('No transcription found in JSON response, using raw response');
-            onAudioChunk(responseText);
+            console.log('No meaningful transcription found in JSON response');
           }
         } catch (parseError) {
           // If not JSON, treat as plain text
           console.log('Response is not JSON, treating as plain text:', responseText);
-          if (responseText.trim()) {
+          if (responseText.trim() && responseText.length > 2) {
             onAudioChunk(responseText);
           }
         }
       } else {
         console.error('Webhook error:', response.status, response.statusText);
+        
+        // Retry on server errors (5xx) up to 2 times
+        if (response.status >= 500 && retryCount < 2) {
+          console.log(`Retrying request (attempt ${retryCount + 1})`);
+          setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 1000);
+          return;
+        }
+        
         onAudioChunk(`[ERROR] Webhook returned ${response.status}: ${response.statusText}`);
       }
     } catch (error) {
       console.error('Error sending audio to webhook:', error);
-      // Fallback to simulated transcription
-      onAudioChunk(`[${mode.toUpperCase()}] Connection error - simulated transcription at ${new Date().toLocaleTimeString()}`);
+      
+      // Retry on network errors up to 2 times
+      if (retryCount < 2) {
+        console.log(`Retrying after network error (attempt ${retryCount + 1})`);
+        setTimeout(() => sendAudioToWebhook(audioBlob, retryCount + 1), 2000);
+        return;
+      }
+      
+      // Only show fallback after all retries failed
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          onAudioChunk(`[${mode.toUpperCase()}] Request timeout - webhook took too long to respond`);
+        } else if (error.message.includes('Failed to fetch')) {
+          onAudioChunk(`[${mode.toUpperCase()}] Network error - check webhook URL and CORS settings`);
+        } else {
+          onAudioChunk(`[${mode.toUpperCase()}] Connection error: ${error.message}`);
+        }
+      } else {
+        onAudioChunk(`[${mode.toUpperCase()}] Unknown error occurred`);
+      }
     }
   };
 
