@@ -33,10 +33,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const chunkIntervalRef = useRef<NodeJS.Timeout>();
   const voiceActivityRef = useRef<boolean>(false);
   const silenceTimeoutRef = useRef<NodeJS.Timeout>();
+  const pendingChunksRef = useRef<Blob[]>([]);
 
   // Voice activity detection parameters
-  const VOICE_THRESHOLD = 0.01; // Minimum amplitude for voice detection
-  const SILENCE_DURATION = 2000; // 2 seconds of silence before stopping
+  const VOICE_THRESHOLD = 0.015; // Slightly higher threshold for better noise filtering
+  const SILENCE_DURATION = 2000; // 2 seconds of silence before processing
   const MIN_VOICE_DURATION = 500; // Minimum voice duration to consider valid
 
   const detectVoiceActivity = (audioData: Float32Array): boolean => {
@@ -47,8 +48,11 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
     }
     const rms = Math.sqrt(sum / audioData.length);
     
-    // Check if RMS exceeds voice threshold
-    return rms > VOICE_THRESHOLD;
+    // Additional frequency analysis for better voice detection
+    const avgAmplitude = audioData.reduce((acc, val) => acc + Math.abs(val), 0) / audioData.length;
+    
+    // Voice is typically in 85Hz-1100Hz range, check for consistent amplitude
+    return rms > VOICE_THRESHOLD && avgAmplitude > 0.005;
   };
 
   const startRecording = async () => {
@@ -150,7 +154,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
           
           if (hasVoice) {
             if (!voiceActivityRef.current) {
-              console.log('🎤 Voice detected, starting transcription');
+              console.log('🎤 Voice detected, will process accumulated audio');
               voiceActivityRef.current = true;
               setIsVoiceDetected(true);
             }
@@ -164,7 +168,13 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
             // Start silence timer if voice was previously detected
             if (voiceActivityRef.current && !silenceTimeoutRef.current) {
               silenceTimeoutRef.current = setTimeout(() => {
-                console.log('🔇 Silence detected, pausing transcription');
+                console.log('🔇 Silence detected, processing collected audio');
+                // Process all accumulated chunks when silence is detected
+                if (pendingChunksRef.current.length > 0) {
+                  const audioBlob = new Blob(pendingChunksRef.current, { type: 'audio/webm' });
+                  sendAudioToWebhook(audioBlob);
+                  pendingChunksRef.current = []; // Clear pending chunks
+                }
                 voiceActivityRef.current = false;
                 setIsVoiceDetected(false);
                 silenceTimeoutRef.current = undefined;
@@ -177,38 +187,37 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       };
       updateAudioLevel();
 
-      // Set up MediaRecorder for chunked recording
+      // Set up MediaRecorder for continuous recording
       mediaRecorderRef.current = new MediaRecorder(stream, {
         mimeType: 'audio/webm;codecs=opus'
       });
 
-      const audioChunks: Blob[] = [];
-      
       mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0 && voiceActivityRef.current) {
-          // Only process chunks when voice activity is detected
-          audioChunks.push(event.data);
-          console.log('📊 Audio chunk captured with voice activity');
+        if (event.data.size > 0) {
+          // Always collect chunks, but only process them when voice activity is detected
+          pendingChunksRef.current.push(event.data);
+          console.log('📊 Audio chunk collected, pending chunks:', pendingChunksRef.current.length);
         }
       };
 
       mediaRecorderRef.current.onstop = async () => {
-        if (audioChunks.length > 0) {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+        // Process any remaining chunks when recording stops
+        if (pendingChunksRef.current.length > 0 && voiceActivityRef.current) {
+          const audioBlob = new Blob(pendingChunksRef.current, { type: 'audio/webm' });
           await sendAudioToWebhook(audioBlob);
+          pendingChunksRef.current = [];
         }
       };
 
       onStartRecording();
       mediaRecorderRef.current.start();
       
-      // Send chunks every 3 seconds, but only process if voice is detected
+      // Collect chunks every 2 seconds for continuous recording
       chunkIntervalRef.current = setInterval(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
-          mediaRecorderRef.current.start();
+          mediaRecorderRef.current.requestData();
         }
-      }, 3000);
+      }, 2000);
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
@@ -246,6 +255,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       audioContextRef.current.close();
     }
 
+    // Clear pending chunks
+    pendingChunksRef.current = [];
     voiceActivityRef.current = false;
     setIsVoiceDetected(false);
     onStopRecording();
@@ -389,7 +400,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
         <div className="flex items-center gap-2 text-xs">
           <div className={`w-2 h-2 rounded-full ${isVoiceDetected ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></div>
           <span className="text-slate-400">
-            {isVoiceDetected ? 'Voice detected' : 'Waiting for voice...'}
+            {isVoiceDetected ? 'Voice detected' : 'Listening...'}
           </span>
         </div>
       )}
