@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff, Monitor, MonitorOff, Info } from 'lucide-react';
@@ -32,9 +33,8 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunkIntervalRef = useRef<NodeJS.Timeout>();
   const accumulatedTranscriptionRef = useRef<string>('');
-  const pendingChunksRef = useRef<Blob[]>([]);
+  const chunkIntervalRef = useRef<NodeJS.Timeout>();
   const isProcessingRef = useRef<boolean>(false);
 
   // Get the most compatible MIME type
@@ -65,7 +65,6 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
       // Reset state
       accumulatedTranscriptionRef.current = '';
       setChunkCount(0);
-      pendingChunksRef.current = [];
       isProcessingRef.current = false;
       
       let stream: MediaStream;
@@ -174,85 +173,75 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Handle data available events
-      mediaRecorder.ondataavailable = (event) => {
-        console.log('📦 Data chunk available, size:', event.data.size, 'bytes');
-        if (event.data.size > 0) {
-          pendingChunksRef.current.push(event.data);
-        }
-      };
-
-      // Process chunks immediately when they're available
-      const processAvailableChunks = async () => {
-        if (pendingChunksRef.current.length > 0 && !isProcessingRef.current) {
-          isProcessingRef.current = true;
-          
-          const chunksToProcess = [...pendingChunksRef.current];
-          pendingChunksRef.current = [];
-          
-          const currentChunkNumber = chunkCount + 1;
-          setChunkCount(currentChunkNumber);
-          
-          console.log(`🔄 Processing chunk #${currentChunkNumber} with ${chunksToProcess.length} pieces`);
-          
-          const audioBlob = new Blob(chunksToProcess, { 
-            type: mediaRecorder.mimeType || 'audio/webm' 
-          });
-          
-          console.log(`📤 Sending chunk #${currentChunkNumber}, size: ${audioBlob.size} bytes`);
-          
-          try {
-            await sendAudioToWebhook(audioBlob, currentChunkNumber);
-          } catch (error) {
-            console.error(`❌ Failed to process chunk #${currentChunkNumber}:`, error);
-          } finally {
-            isProcessingRef.current = false;
+      // Set up continuous chunking logic
+      const startContinuousChunking = () => {
+        console.log('🔄 Starting continuous chunking every 3 seconds');
+        
+        const processChunk = async () => {
+          if (!mediaRecorderRef.current || !streamRef.current || !isRecording) {
+            console.log('⚠️ Recording stopped, ending chunk processing');
+            return;
           }
-        }
+
+          if (mediaRecorderRef.current.state === 'inactive') {
+            console.log('📹 Starting new recording chunk');
+            
+            // Set up data handler for this chunk
+            mediaRecorderRef.current.ondataavailable = async (event) => {
+              console.log(`📦 Chunk data available, size: ${event.data.size} bytes`);
+              
+              if (event.data.size === 0) {
+                console.warn('⚠️ Received empty chunk, skipping...');
+                return;
+              }
+
+              if (!isProcessingRef.current) {
+                isProcessingRef.current = true;
+                const currentChunkNumber = chunkCount + 1;
+                setChunkCount(currentChunkNumber);
+                
+                console.log(`🔄 Processing chunk #${currentChunkNumber}`);
+                
+                try {
+                  await sendAudioToWebhook(event.data, currentChunkNumber);
+                } catch (error) {
+                  console.error(`❌ Failed to process chunk #${currentChunkNumber}:`, error);
+                } finally {
+                  isProcessingRef.current = false;
+                }
+              }
+            };
+
+            // Start recording for 3 seconds
+            mediaRecorderRef.current.start();
+            
+            // Stop after 3 seconds and schedule next chunk
+            setTimeout(() => {
+              if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+                console.log('⏹️ Stopping current chunk');
+                mediaRecorderRef.current.stop();
+                
+                // Schedule next chunk if still recording
+                if (isRecording && streamRef.current && streamRef.current.active) {
+                  setTimeout(processChunk, 100); // Small delay to ensure clean state transition
+                }
+              }
+            }, 3000);
+          }
+        };
+
+        // Start the first chunk
+        processChunk();
       };
 
-      mediaRecorder.onstop = async () => {
-        console.log('⏹️ MediaRecorder stopped');
-        // Process any remaining chunks
-        await processAvailableChunks();
-      };
-
-      mediaRecorder.onerror = (event) => {
-        console.error('❌ MediaRecorder error:', event);
-        toast({
-          title: "Recording error",
-          description: "An error occurred during recording",
-          variant: "destructive"
-        });
-      };
-
-      // Start recording
-      try {
-        console.log('▶️ Starting MediaRecorder with 2-second chunks...');
-        mediaRecorder.start(2000); // 2-second chunks for responsive transcription
-      } catch (startError) {
-        console.error('❌ Failed to start MediaRecorder:', startError);
-        throw new Error('Failed to start recording - browser may not support this audio format');
-      }
-      
-      // Set up interval to request data and process chunks every 2 seconds
-      chunkIntervalRef.current = setInterval(async () => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          console.log('⏰ Requesting data for chunk processing...');
-          mediaRecorderRef.current.requestData();
-          
-          // Wait a moment for data to be available, then process
-          setTimeout(processAvailableChunks, 200);
-        } else {
-          console.log('⚠️ MediaRecorder not in recording state:', mediaRecorderRef.current?.state);
-        }
-      }, 2000);
+      // Start continuous chunking
+      startContinuousChunking();
 
       onStartRecording();
       
       toast({
         title: `${mode === 'microphone' ? 'Microphone' : 'System audio'} recording started`,
-        description: "Real-time transcription every 2 seconds"
+        description: "Real-time transcription every 3 seconds"
       });
 
     } catch (error) {
