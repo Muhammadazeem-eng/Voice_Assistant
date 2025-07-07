@@ -1,9 +1,10 @@
-
 import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Upload, File } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import { processDocument, chunkText } from '@/utils/documentProcessor';
+import { supabase } from '@/integrations/supabase/client';
 
 interface FileUploadProps {
   onFileProcessed: (text: string) => void;
@@ -17,8 +18,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const allowedTypes = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a'];
-  const allowedExtensions = ['.wav', '.mp3', '.m4a'];
+  const allowedTypes = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+  const allowedExtensions = ['.wav', '.mp3', '.m4a', '.pdf', '.docx'];
 
   const validateFile = (file: File): boolean => {
     const isValidType = allowedTypes.includes(file.type);
@@ -29,7 +30,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
     if (!isValidType && !hasValidExtension) {
       toast({
         title: "Invalid file type",
-        description: "Please upload only .wav, .mp3, or .m4a audio files.",
+        description: "Please upload audio files (.wav, .mp3, .m4a) or documents (.pdf, .docx).",
         variant: "destructive"
       });
       return false;
@@ -55,32 +56,49 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
     setUploadProgress(0);
 
     try {
-      if (!webhookUrl) {
-        // Simulate file processing for demo
-        const duration = Math.random() * 3 + 2; // 2-5 seconds
-        const steps = 20;
-        const stepDuration = (duration * 1000) / steps;
+      const isDocument = file.type.includes('pdf') || file.type.includes('wordprocessingml');
+      
+      if (isDocument) {
+        // Process document
+        setUploadProgress(25);
+        const processedDoc = await processDocument(file);
+        
+        setUploadProgress(50);
+        onFileProcessed(`[DOCUMENT: ${file.name}] Document content processed successfully. You can now ask questions about this document in the chat.`);
+        
+        setUploadProgress(100);
+        toast({
+          title: "Document processed successfully",
+          description: `${file.name} has been processed. Use the chat to ask questions about it.`
+        });
+      } else {
+        // Process audio file (existing logic)
+        if (!webhookUrl) {
+          // Simulate file processing for demo
+          const duration = Math.random() * 3 + 2; // 2-5 seconds
+          const steps = 20;
+          const stepDuration = (duration * 1000) / steps;
 
-        for (let i = 0; i <= steps; i++) {
-          await new Promise(resolve => setTimeout(resolve, stepDuration));
-          setUploadProgress((i / steps) * 100);
+          for (let i = 0; i <= steps; i++) {
+            await new Promise(resolve => setTimeout(resolve, stepDuration));
+            setUploadProgress((i / steps) * 100);
+          }
+
+          onFileProcessed(`[AUDIO: ${file.name}] Simulated transcription of uploaded audio file processed at ${new Date().toLocaleTimeString()}`);
+        } else {
+          await processWithWebhook(file);
         }
-
-        onFileProcessed(`[FILE: ${file.name}] Simulated transcription of uploaded audio file processed at ${new Date().toLocaleTimeString()}`);
         
         toast({
           title: "File processed successfully",
-          description: `${file.name} has been transcribed.`
+          description: `${file.name} has been processed.`
         });
-      } else {
-        // Real webhook processing
-        await processWithWebhook(file);
       }
     } catch (error) {
       console.error('Error processing file:', error);
       toast({
         title: "Processing failed",
-        description: "Failed to process the audio file. Please try again.",
+        description: "Failed to process the file. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -174,7 +192,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
           ) : (
             <>
               <Upload className="w-5 h-5" />
-              <span className="text-sm">Drop audio file or click</span>
+              <span className="text-sm">Drop files or click</span>
             </>
           )}
         </div>
@@ -183,7 +201,7 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
       <input
         ref={fileInputRef}
         type="file"
-        accept=".wav,.mp3,.m4a,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a"
+        accept=".wav,.mp3,.m4a,.pdf,.docx,audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         onChange={handleFileSelect}
         className="hidden"
         disabled={isProcessing}
@@ -200,8 +218,8 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileProcessed, webhookUrl }) 
       )}
 
       <div className="text-center">
-        <p className="text-sm text-slate-400">Audio Upload</p>
-        <p className="text-xs text-slate-500">Supports .wav, .mp3, .m4a</p>
+        <p className="text-sm text-slate-400">Audio & Document Upload</p>
+        <p className="text-xs text-slate-500">Supports .wav, .mp3, .m4a, .pdf, .docx</p>
       </div>
     </div>
   );

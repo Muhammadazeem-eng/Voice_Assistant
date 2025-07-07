@@ -1,18 +1,20 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Send, FileText } from 'lucide-react';
+import { Send, FileText, File } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
+import DocumentUpload from './DocumentUpload';
+import { useRAGChat } from '@/hooks/useRAGChat';
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  documentContext?: any[];
 }
 
 interface ChatInterfaceProps {
@@ -23,7 +25,7 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({
-  messages,
+  messages: externalMessages,
   onSendMessage,
   apiKey,
   transcriptionText
@@ -31,6 +33,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  
+  const { 
+    documents, 
+    setDocuments, 
+    messages: ragMessages, 
+    sendMessage: sendRAGMessage 
+  } = useRAGChat(apiKey);
+
+  // Use RAG messages if available, otherwise use external messages
+  const displayMessages = ragMessages.length > 0 ? ragMessages : externalMessages;
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -40,9 +52,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
     }
-  }, [messages]);
+  }, [displayMessages]);
 
-  const sendMessage = async () => {
+  const handleSendMessage = async () => {
     if (!inputText.trim()) return;
     
     if (!apiKey) {
@@ -56,53 +68,59 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
     const userMessage = inputText.trim();
     setInputText('');
-    onSendMessage('user', userMessage);
     setIsLoading(true);
 
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4-turbo-preview',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a helpful AI assistant for meeting transcription and analysis. You can help analyze transcriptions, answer questions about the content, and provide insights.'
-            },
-            ...messages.map(msg => ({
-              role: msg.role,
-              content: msg.content
-            })),
-            {
-              role: 'user',
-              content: userMessage
-            }
-          ],
-          max_tokens: 1000,
-          temperature: 0.7
-        })
-      });
+      // Use RAG-enabled send message if we have documents
+      if (documents.length > 0) {
+        await sendRAGMessage(userMessage);
+      } else {
+        // Fallback to original chat logic
+        onSendMessage('user', userMessage);
 
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.statusText}`);
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-4-turbo-preview',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are a helpful AI assistant for meeting transcription and analysis. You can help analyze transcriptions, answer questions about the content, and provide insights.'
+              },
+              ...messages.map(msg => ({
+                role: msg.role,
+                content: msg.content
+              })),
+              {
+                role: 'user',
+                content: userMessage
+              }
+            ],
+            max_tokens: 1000,
+            temperature: 0.7
+          })
+        });
+  
+        if (!response.ok) {
+          throw new Error(`API request failed: ${response.statusText}`);
+        }
+  
+        const data = await response.json();
+        const assistantMessage = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+        
+        onSendMessage('assistant', assistantMessage);
       }
-
-      const data = await response.json();
-      const assistantMessage = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
-      
-      onSendMessage('assistant', assistantMessage);
     } catch (error) {
-      console.error('Error calling OpenAI API:', error);
+      console.error('Error sending message:', error);
       toast({
-        title: "API Error",
-        description: "Failed to get response from AI assistant. Please check your API key and try again.",
+        title: "Error",
+        description: "Failed to send message. Please try again.",
         variant: "destructive"
       });
-      onSendMessage('assistant', 'Sorry, I encountered an error while processing your request.');
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +143,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      sendMessage();
+      handleSendMessage();
     }
   };
 
@@ -142,20 +160,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         <div className="flex items-center justify-between">
           <h4 className="font-medium text-slate-200">AI Chat Assistant</h4>
           <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
-            {messages.length} messages
+            {displayMessages.length} messages
           </Badge>
         </div>
       </div>
 
+      <div className="border-b border-slate-700 p-4">
+        <DocumentUpload
+          documents={documents}
+          onDocumentsChange={setDocuments}
+          apiKey={apiKey}
+        />
+      </div>
+
       <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-        {messages.length === 0 ? (
+        {displayMessages.length === 0 ? (
           <div className="text-slate-500 italic text-sm text-center py-8">
             <p>Start a conversation with the AI assistant.</p>
-            <p className="mt-2">Ask questions about your transcription or get meeting insights.</p>
+            <p className="mt-2">Ask questions about your transcription or uploaded documents.</p>
           </div>
         ) : (
           <div className="space-y-4">
-            {messages.map((message) => (
+            {displayMessages.map((message) => (
               <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[80%] rounded-lg p-3 ${
                   message.role === 'user' 
@@ -173,6 +199,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   <p className="text-sm leading-relaxed whitespace-pre-wrap">
                     {message.content}
                   </p>
+                  {message.documentContext && message.documentContext.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-slate-600">
+                      <p className="text-xs text-slate-400 mb-1">Sources:</p>
+                      <div className="flex flex-wrap gap-1">
+                        {message.documentContext.map((doc, index) => (
+                          <Badge key={index} variant="outline" className="text-xs">
+                            <File className="w-3 h-3 mr-1" />
+                            {doc.filename}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -213,12 +252,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about the transcription or chat with AI..."
+            placeholder="Ask about the transcription or your documents..."
             className="bg-slate-800 border-slate-600 text-slate-50 flex-1"
             disabled={isLoading}
           />
           <Button 
-            onClick={sendMessage}
+            onClick={handleSendMessage}
             disabled={!inputText.trim() || isLoading}
             className="bg-blue-600 hover:bg-blue-700"
           >
