@@ -2,20 +2,19 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 
-// Enhanced PDF.js worker setup with multiple fallbacks
+// Simple PDF.js worker setup with local fallback
 if (typeof window !== 'undefined') {
   try {
-    // Try different worker sources in order of preference
-    const workerSources = [
-      `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.js`,
-      `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`,
-      'https://mozilla.github.io/pdf.js/build/pdf.worker.min.js'
-    ];
-    
-    pdfjsLib.GlobalWorkerOptions.workerSrc = workerSources[0]; // Start with unpkg
-    console.log('PDF.js worker configured with:', pdfjsLib.GlobalWorkerOptions.workerSrc);
+    // Use the built-in worker from the package
+    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.min.js',
+      import.meta.url
+    ).toString();
+    console.log('PDF.js worker configured successfully');
   } catch (error) {
     console.warn('PDF.js worker setup warning:', error);
+    // Fallback to CDN worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   }
 }
 
@@ -41,7 +40,7 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 
   try {
     if (fileType === 'application/pdf') {
-      const result = await extractPDFTextEnhanced(file);
+      const result = await extractPDFTextSimplified(file);
       content = result.content;
       processingDetails = result.details;
     } else if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -75,43 +74,34 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
   }
 };
 
-const extractPDFTextEnhanced = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting enhanced PDF extraction for:', file.name);
+const extractPDFTextSimplified = async (file: File): Promise<{content: string, details: any}> => {
+  console.log('Starting simplified PDF extraction for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Simplified PDF loading with basic options
-    const loadingTask = pdfjsLib.getDocument({ 
+    // Simplified PDF loading with minimal configuration
+    const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
-      verbosity: 0 // Reduce console spam
-    });
+      verbosity: 0,
+      standardFontDataUrl: undefined, // Disable font loading
+      cMapUrl: undefined, // Disable cMap loading
+      useSystemFonts: false
+    }).promise;
 
-    const pdf = await loadingTask.promise;
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
     let fullText = '';
     let successfulPages = 0;
-    let hasImages = false;
 
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       try {
         console.log(`Processing PDF page ${pageNum}/${pdf.numPages}`);
         const page = await pdf.getPage(pageNum);
         
-        // Get text content with minimal options
+        // Get text content with basic options
         const textContent = await page.getTextContent();
-        
-        // Check if page has images (simplified check)
-        try {
-          const operatorList = await page.getOperatorList();
-          if (operatorList.fnArray && operatorList.fnArray.includes(pdfjsLib.OPS.paintImageXObject)) {
-            hasImages = true;
-          }
-        } catch (opError) {
-          console.warn(`Could not check for images on page ${pageNum}:`, opError.message);
-        }
         
         if (textContent.items && textContent.items.length > 0) {
           const pageText = textContent.items
@@ -129,16 +119,16 @@ const extractPDFTextEnhanced = async (file: File): Promise<{content: string, det
         }
       } catch (pageError) {
         console.warn(`Error processing PDF page ${pageNum}:`, pageError.message);
-        // Continue with other pages instead of failing completely
+        // Continue with other pages
       }
     }
 
     if (successfulPages === 0) {
-      throw new Error(`No readable text found in PDF. This may be an image-based PDF or the text may be embedded as images. Extracted from ${successfulPages}/${pdf.numPages} pages.`);
+      throw new Error(`No readable text found in PDF. This may be an image-based PDF. Processed ${successfulPages}/${pdf.numPages} pages.`);
     }
 
     if (fullText.trim().length < 10) {
-      throw new Error(`Very little text extracted (${fullText.length} characters). This PDF may contain mostly images or have text rendering issues.`);
+      throw new Error(`Very little text extracted (${fullText.length} characters). This PDF may contain mostly images.`);
     }
 
     console.log(`PDF extraction completed: ${fullText.length} characters from ${successfulPages}/${pdf.numPages} pages`);
@@ -146,22 +136,19 @@ const extractPDFTextEnhanced = async (file: File): Promise<{content: string, det
     return {
       content: fullText.trim(),
       details: {
-        extractionMethod: 'PDF.js enhanced',
+        extractionMethod: 'PDF.js simplified',
         pageCount: pdf.numPages,
-        successfulPages,
-        hasImages
+        successfulPages
       }
     };
   } catch (error) {
-    console.error('Enhanced PDF extraction failed:', error);
+    console.error('PDF extraction failed:', error);
     
-    // Provide specific error messages based on error type
+    // Provide specific error messages
     if (error.message.includes('Invalid PDF')) {
       throw new Error('Invalid PDF file format. Please ensure the file is a valid PDF document.');
     } else if (error.message.includes('Password')) {
       throw new Error('Password-protected PDF detected. Please provide an unprotected PDF file.');
-    } else if (error.message.includes('worker')) {
-      throw new Error('PDF processing service setup failed. Please refresh the page and try again.');
     } else {
       throw new Error(`PDF text extraction failed: ${error.message}. This may be an image-based PDF or contain complex formatting.`);
     }
@@ -175,7 +162,7 @@ const extractDOCXTextEnhanced = async (file: File): Promise<{content: string, de
     const arrayBuffer = await file.arrayBuffer();
     console.log('DOCX arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Use correct mammoth API
+    // Use mammoth to extract raw text
     const result = await mammoth.extractRawText({ arrayBuffer });
     
     console.log('DOCX extraction result:', {
