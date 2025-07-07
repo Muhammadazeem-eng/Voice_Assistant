@@ -27,7 +27,6 @@ export const useRAGChat = (apiKey: string) => {
   const [sessionId] = useState<string>(getOrCreateSessionId());
 
   useEffect(() => {
-    // Initialize session and fetch documents
     const initializeSession = async () => {
       await fetchDocuments();
       await createOrGetSession();
@@ -83,6 +82,8 @@ export const useRAGChat = (apiKey: string) => {
     if (!apiKey) return [];
 
     try {
+      console.log('Searching documents for query:', query);
+      
       // Generate embedding for the query
       const response = await fetch('https://api.openai.com/v1/embeddings', {
         method: 'POST',
@@ -111,6 +112,7 @@ export const useRAGChat = (apiKey: string) => {
       });
 
       if (error) throw error;
+      console.log('Found relevant chunks:', chunks?.length || 0);
       return chunks || [];
     } catch (error) {
       console.error('Error searching documents:', error);
@@ -140,16 +142,22 @@ export const useRAGChat = (apiKey: string) => {
 
       // Search for relevant document chunks
       const relevantChunks = await searchDocuments(content);
+      console.log('Using document chunks:', relevantChunks.length);
       
       // Prepare context for AI
-      let systemPrompt = 'You are a helpful AI assistant for meeting transcription and analysis.';
+      let systemPrompt = 'You are a helpful AI assistant for document analysis and meeting transcription.';
       
       if (relevantChunks.length > 0) {
         const context = relevantChunks
           .map(chunk => `From "${chunk.filename}": ${chunk.chunk_text}`)
-          .join('\n\n');
+          .join('\n\n---\n\n');
         
-        systemPrompt += `\n\nRelevant document context:\n${context}\n\nUse this context to answer the user's question when relevant.`;
+        systemPrompt = `You are a helpful AI assistant for document analysis and meeting transcription. You have access to the following document content to help answer questions:
+
+DOCUMENT CONTEXT:
+${context}
+
+Use this context to provide accurate and detailed answers. If the user asks about information in the documents, reference the specific document and provide relevant details. If the information is not in the provided context, let the user know that the information is not available in the uploaded documents.`;
       }
 
       // Call OpenAI API
@@ -160,13 +168,13 @@ export const useRAGChat = (apiKey: string) => {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          model: 'gpt-4-turbo-preview',
+          model: 'gpt-4o-mini',
           messages: [
             { role: 'system', content: systemPrompt },
             ...messages.map(msg => ({ role: msg.role, content: msg.content })),
             { role: 'user', content }
           ],
-          max_tokens: 1000,
+          max_tokens: 1500,
           temperature: 0.7
         })
       });

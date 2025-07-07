@@ -59,9 +59,12 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     setUploadProgress(0);
 
     try {
+      console.log('Processing document:', file.name, file.type);
+      
       // Process document
       setUploadProgress(20);
       const processedDoc = await processDocument(file);
+      console.log('Document processed successfully, content length:', processedDoc.content.length);
       
       // Store document in database
       setUploadProgress(40);
@@ -78,10 +81,12 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         .single();
 
       if (docError) throw docError;
+      console.log('Document stored in database:', docData.id);
 
       // Chunk the text
       setUploadProgress(60);
       const chunks = chunkText(processedDoc.content);
+      console.log('Generated chunks:', chunks.length);
       
       // Generate embeddings and store chunks
       setUploadProgress(80);
@@ -116,6 +121,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
+      console.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(chunks.length/batchSize)}`);
       
       // Generate embeddings for batch
       const embeddingPromises = batch.map(async (chunk, index) => {
@@ -154,6 +160,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
       if (error) throw error;
     }
+    console.log('All chunks processed and stored');
   };
 
   const deleteDocument = async (documentId: string) => {
