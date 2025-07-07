@@ -1,4 +1,3 @@
-
 import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -37,7 +36,8 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    if (!apiKey) {
+    // Validate API key first
+    if (!apiKey || apiKey.trim().length === 0) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenAI API key to upload documents.",
@@ -73,17 +73,24 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         size: file.size,
         lastModified: new Date(file.lastModified).toISOString()
       });
+      console.log('API Key configured:', apiKey ? 'Yes' : 'No');
       
-      // Step 1: Process document
+      // Step 1: Process document with better error handling
       setUploadProgress(15);
       setProcessingStatus('Extracting text from document...');
-      const processedDoc = await processDocument(file);
       
-      console.log('Document processing completed:', {
-        contentLength: processedDoc.content.length,
-        wordCount: processedDoc.processingDetails?.wordCount,
-        extractionMethod: processedDoc.processingDetails?.extractionMethod
-      });
+      let processedDoc;
+      try {
+        processedDoc = await processDocument(file);
+        console.log('Document processing completed:', {
+          contentLength: processedDoc.content.length,
+          wordCount: processedDoc.processingDetails?.wordCount,
+          extractionMethod: processedDoc.processingDetails?.extractionMethod
+        });
+      } catch (processingError) {
+        console.error('Document processing failed:', processingError);
+        throw new Error(`Document processing failed: ${processingError.message}`);
+      }
       
       // Step 2: Store document in database
       setUploadProgress(30);
@@ -103,7 +110,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
       if (docError) {
         console.error('Database insertion error:', docError);
-        throw docError;
+        throw new Error(`Database error: ${docError.message}`);
       }
       
       console.log('Document stored in database with ID:', docData.id);
@@ -119,10 +126,10 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         throw new Error('No valid text chunks could be created from the document content.');
       }
       
-      // Step 4: Process chunks in batches with embeddings
+      // Step 4: Process chunks with embeddings and better error handling
       setUploadProgress(60);
       setProcessingStatus('Generating embeddings...');
-      await processChunksWithEmbeddings(chunks, docData.id, apiKey, (progress) => {
+      await processChunksWithEmbeddings(chunks, docData.id, apiKey.trim(), (progress) => {
         setUploadProgress(60 + (progress * 35)); // 60-95% for embeddings
         setProcessingStatus(`Processing embeddings... (${Math.round(progress * 100)}%)`);
       });
@@ -154,13 +161,16 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       
       if (error.message.includes('image-based')) {
         errorTitle = "Image-based PDF detected";
-        errorMessage = "This PDF appears to contain mostly images. Please try a PDF with selectable text or convert it to a text-based format.";
-      } else if (error.message.includes('corrupted')) {
+        errorMessage = "This PDF appears to contain mostly images. Please try a PDF with selectable text.";
+      } else if (error.message.includes('corrupted') || error.message.includes('Invalid PDF')) {
         errorTitle = "File appears corrupted";
         errorMessage = "The file may be corrupted or password-protected. Please try a different file.";
-      } else if (error.message.includes('API')) {
+      } else if (error.message.includes('API') || error.message.includes('Embedding')) {
         errorTitle = "API Error";
         errorMessage = "There was an issue with the embedding generation. Please check your API key and try again.";
+      } else if (error.message.includes('401') || error.message.includes('Invalid API key')) {
+        errorTitle = "Invalid API Key";
+        errorMessage = "Your OpenAI API key appears to be invalid. Please check your API key configuration.";
       }
       
       toast({
@@ -183,10 +193,11 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     apiKey: string,
     onProgress?: (progress: number) => void
   ) => {
-    const batchSize = 5; // Smaller batches for more reliable processing
+    const batchSize = 3; // Smaller batches for more reliable processing
     const totalBatches = Math.ceil(chunks.length / batchSize);
     
     console.log(`Processing ${chunks.length} chunks in ${totalBatches} batches`);
+    console.log('Using API key (first 10 chars):', apiKey.substring(0, 10) + '...');
     
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
@@ -195,12 +206,14 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)`);
       
       try {
-        // Generate embeddings for batch with retry logic
+        // Generate embeddings for batch with enhanced error handling
         const embeddingPromises = batch.map(async (chunk, index) => {
           const actualIndex = i + index;
           
           for (let attempt = 1; attempt <= 3; attempt++) {
             try {
+              console.log(`Generating embedding for chunk ${actualIndex} (attempt ${attempt})`);
+              
               const response = await fetch('https://api.openai.com/v1/embeddings', {
                 method: 'POST',
                 headers: {
@@ -216,10 +229,21 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
               if (!response.ok) {
                 const errorData = await response.json().catch(() => null);
-                throw new Error(`Embedding API error (${response.status}): ${errorData?.error?.message || response.statusText}`);
+                const errorMessage = errorData?.error?.message || response.statusText;
+                console.error(`API error for chunk ${actualIndex}:`, response.status, errorMessage);
+                
+                if (response.status === 401) {
+                  throw new Error('Invalid API key. Please check your OpenAI API key configuration.');
+                } else if (response.status === 429) {
+                  throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+                } else {
+                  throw new Error(`Embedding API error (${response.status}): ${errorMessage}`);
+                }
               }
 
               const result = await response.json();
+              console.log(`Embedding generated successfully for chunk ${actualIndex}`);
+              
               return {
                 document_id: documentId,
                 chunk_text: chunk,
@@ -244,7 +268,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
         if (error) {
           console.error('Database insertion error for batch', batchNumber, ':', error);
-          throw error;
+          throw new Error(`Database error for batch ${batchNumber}: ${error.message}`);
         }
         
         console.log(`Batch ${batchNumber} stored successfully in database`);
