@@ -115,11 +115,11 @@ export const useRAGChat = (apiKey: string) => {
       const queryEmbedding = embeddingResult.data[0].embedding;
       console.log('Query embedding generated successfully');
 
-      // Search for similar chunks with enhanced parameters
+      // Search for similar chunks with lower threshold for better recall
       const { data: chunks, error } = await supabase.rpc('search_document_chunks', {
         query_embedding: queryEmbedding,
-        match_threshold: 0.5, // Lower threshold for better recall
-        match_count: 8, // More results for better context
+        match_threshold: 0.3, // Much lower threshold for better recall
+        match_count: 10, // More results for better context
         session_id_param: sessionId
       });
 
@@ -176,14 +176,15 @@ export const useRAGChat = (apiKey: string) => {
       console.log('Using document chunks for context:', relevantChunks.length);
       
       // Enhanced system prompt with better document context handling
-      let systemPrompt = `You are a helpful AI assistant specializing in document analysis and meeting transcription. You have access to uploaded documents and can provide detailed analysis based on their content.
+      let systemPrompt = `You are a helpful AI assistant with access to uploaded documents. You can provide detailed analysis based on their content.
 
 IMPORTANT INSTRUCTIONS:
 - You have access to specific document content that has been uploaded by the user
 - Always reference the documents when answering questions about their content
 - Be specific about which document you're referencing
 - If information isn't in the provided documents, clearly state that
-- Provide detailed, accurate responses based on the document content`;
+- Provide detailed, accurate responses based on the document content
+- When asked about project titles, names, or specific details, look for them in the document content`;
 
       if (relevantChunks.length > 0) {
         const documentContext = relevantChunks
@@ -195,7 +196,7 @@ Content: ${chunk.chunk_text}
           })
           .join('\n\n');
 
-        systemPrompt = `You are a helpful AI assistant specializing in document analysis. You have access to the following document content that the user has uploaded:
+        systemPrompt = `You are a helpful AI assistant with access to uploaded documents. You have the following document content available:
 
 DOCUMENT CONTEXT:
 ${documentContext}
@@ -206,7 +207,8 @@ INSTRUCTIONS:
 - Be detailed and accurate in your responses
 - If the user asks about information not found in these documents, clearly state that the information is not available in the uploaded documents
 - When referencing documents, mention the filename and provide specific details from the content
-- The documents are provided in order of relevance to the user's question`;
+- The documents are provided in order of relevance to the user's question
+- For questions about project titles, names, or specific details, look carefully in the document content`;
 
         console.log('Enhanced system prompt created with', relevantChunks.length, 'document chunks');
       } else {
@@ -216,7 +218,7 @@ INSTRUCTIONS:
       // Prepare conversation history
       const conversationMessages = [
         { role: 'system', content: systemPrompt },
-        ...messages.slice(-6).map(msg => ({ role: msg.role, content: msg.content })), // Last 6 messages for context
+        ...messages.slice(-4).map(msg => ({ role: msg.role, content: msg.content })), // Last 4 messages for context
         { role: 'user', content }
       ];
 
@@ -233,7 +235,7 @@ INSTRUCTIONS:
           model: 'gpt-4o-mini',
           messages: conversationMessages,
           max_tokens: 2000, // Increased for more detailed responses
-          temperature: 0.3, // Lower temperature for more focused, factual responses
+          temperature: 0.2, // Lower temperature for more focused, factual responses
           top_p: 0.9,
           frequency_penalty: 0.1,
           presence_penalty: 0.1
