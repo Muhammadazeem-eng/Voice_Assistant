@@ -1,17 +1,5 @@
 
-import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
-
-// Configure PDF.js worker with multiple fallback options
-if (typeof window !== 'undefined') {
-  try {
-    // Try to use the bundled worker first
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
-    console.log('PDF.js worker configured with CDN');
-  } catch (error) {
-    console.warn('PDF.js worker setup error:', error);
-  }
-}
 
 export interface ProcessedDocument {
   content: string;
@@ -70,95 +58,44 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 };
 
 const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting PDF extraction for:', file.name);
+  console.log('Starting simple PDF extraction for:', file.name);
   
   try {
+    // Use dynamic import to load pdf-parse
+    const pdfParse = (await import('pdf-parse')).default;
+    
     const arrayBuffer = await file.arrayBuffer();
-    console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
+    const buffer = new Uint8Array(arrayBuffer);
     
-    // Load PDF with minimal configuration
-    const pdf = await pdfjsLib.getDocument({
-      data: arrayBuffer,
-      verbosity: 0
-    }).promise;
-
-    console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
+    console.log('PDF buffer size:', buffer.length);
     
-    let allText = '';
-    let processedPages = 0;
-    let totalTextLength = 0;
-
-    // Process each page
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      try {
-        console.log(`Processing PDF page ${pageNum}/${pdf.numPages}`);
-        const page = await pdf.getPage(pageNum);
-        
-        // Extract text content
-        const textContent = await page.getTextContent();
-        
-        // Process text items more permissively
-        let pageText = '';
-        if (textContent.items && textContent.items.length > 0) {
-          pageText = textContent.items
-            .map((item: any) => {
-              // Handle different item types
-              if (item.str !== undefined) {
-                return item.str;
-              }
-              return '';
-            })
-            .filter(text => text && text.trim().length > 0)
-            .join(' ');
-        }
-        
-        // Clean up the page text
-        pageText = pageText
-          .replace(/\s+/g, ' ')
-          .trim();
-        
-        if (pageText.length > 0) {
-          allText += pageText + '\n\n';
-          totalTextLength += pageText.length;
-          processedPages++;
-          console.log(`Page ${pageNum}: extracted ${pageText.length} characters`);
-        } else {
-          console.log(`Page ${pageNum}: no text found`);
-        }
-        
-      } catch (pageError) {
-        console.warn(`Error processing PDF page ${pageNum}:`, pageError.message);
-        // Continue with other pages instead of failing
-        continue;
-      }
+    // Parse PDF with pdf-parse (much simpler and more reliable)
+    const pdfData = await pdfParse(buffer);
+    
+    console.log(`PDF parsed successfully. Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length}`);
+    
+    if (!pdfData.text || pdfData.text.trim().length === 0) {
+      throw new Error('No text content found in PDF. This may be an image-based PDF that requires OCR.');
     }
-
-    console.log(`PDF processing summary: ${processedPages}/${pdf.numPages} pages processed, ${totalTextLength} total characters`);
-
-    // Be more lenient with text validation
-    if (totalTextLength === 0) {
-      throw new Error(`No text content found in any pages. This appears to be an image-based PDF that requires OCR processing.`);
-    }
-
-    // Accept even small amounts of text (some PDFs have sparse text)
-    if (totalTextLength < 5) {
-      console.warn(`Very little text extracted (${totalTextLength} characters), but proceeding anyway`);
-    }
-
+    
+    // Clean up the extracted text
+    const cleanedText = pdfData.text
+      .replace(/\s+/g, ' ')
+      .replace(/\n\s*\n/g, '\n\n')
+      .trim();
+    
     return {
-      content: allText.trim(),
+      content: cleanedText,
       details: {
-        extractionMethod: 'PDF.js text extraction',
-        pageCount: pdf.numPages,
-        processedPages,
-        totalTextLength
+        extractionMethod: 'pdf-parse library',
+        pageCount: pdfData.numpages,
+        totalTextLength: cleanedText.length
       }
     };
     
   } catch (error) {
     console.error('PDF extraction failed:', error);
     
-    // Provide more specific error messages
     if (error.message.includes('Invalid PDF')) {
       throw new Error('This file does not appear to be a valid PDF document.');
     } else if (error.message.includes('password') || error.message.includes('encrypted')) {
@@ -246,7 +183,7 @@ export const chunkText = (text: string, chunkSize: number = 800, overlap: number
     }
     
     const trimmedChunk = chunk.trim();
-    if (trimmedChunk.length > 10) { // Reduced minimum chunk size
+    if (trimmedChunk.length > 10) {
       chunks.push(trimmedChunk);
       console.log(`Chunk ${chunks.length}: ${trimmedChunk.length} characters`);
     }
