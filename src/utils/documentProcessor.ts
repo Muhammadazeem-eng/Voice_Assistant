@@ -1,8 +1,8 @@
 import mammoth from 'mammoth';
-import * as pdfjsLib from 'pdfjs-dist';
+import { pdfjs, getDocument } from 'react-pdf';
 
-// Configure PDF.js worker with proper version matching
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+// Configure react-pdf worker with proper version matching
+pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 export interface ProcessedDocument {
   content: string;
@@ -62,37 +62,30 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 };
 
 const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting robust PDF text extraction for:', file.name);
+  console.log('Starting PDF text extraction with react-pdf for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Load PDF with minimal configuration to avoid API errors
-    const pdf = await pdfjsLib.getDocument({
-      data: arrayBuffer,
-      verbosity: 0
-    }).promise;
+    // Load PDF with react-pdf
+    const pdf = await getDocument({ data: arrayBuffer }).promise;
     
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
     let fullText = '';
     let successfulPages = 0;
     
-    // Extract text from each page with better error handling
+    // Extract text from each page
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       try {
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         
-        // Better text extraction with spacing preservation
+        // Extract text from page
         const pageText = textContent.items
           .filter((item: any) => item.str && typeof item.str === 'string')
-          .map((item: any) => {
-            // Preserve some spacing context
-            const str = item.str.trim();
-            return str;
-          })
+          .map((item: any) => item.str.trim())
           .filter((text: string) => text.length > 0)
           .join(' ');
         
@@ -110,7 +103,7 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     
     console.log(`Successfully processed ${successfulPages}/${pdf.numPages} pages`);
     
-    // Clean up the extracted text but preserve structure
+    // Clean up the extracted text
     const cleanedText = fullText
       .replace(/\s{3,}/g, ' ')  // Replace multiple spaces with single space
       .replace(/\n\s*\n\s*\n/g, '\n\n')  // Normalize paragraph breaks
@@ -118,15 +111,15 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     
     console.log(`PDF text extraction completed: ${cleanedText.length} characters total`);
     
-    // More lenient validation - accept even short documents
-    if (!cleanedText || cleanedText.length < 5) {
+    // Validation - accept documents with minimal text
+    if (!cleanedText || cleanedText.length < 10) {
       throw new Error('No readable text content found in PDF. This document may be image-based or corrupted.');
     }
     
     return {
       content: cleanedText,
       details: {
-        extractionMethod: 'PDF.js browser extraction',
+        extractionMethod: 'react-pdf text extraction',
         pageCount: pdf.numPages,
         successfulPages,
         totalTextLength: cleanedText.length
@@ -136,7 +129,7 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
   } catch (error) {
     console.error('PDF extraction failed:', error);
     
-    // Provide more specific error messages
+    // Provide specific error messages
     if (error.message.includes('Invalid PDF') || error.message.includes('corrupted')) {
       throw new Error('Invalid PDF file. Please ensure the file is not corrupted.');
     } else if (error.message.includes('password') || error.message.includes('encrypted')) {
