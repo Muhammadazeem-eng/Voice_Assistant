@@ -1,5 +1,4 @@
-
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,12 +24,16 @@ interface ChatInterfaceProps {
   transcriptionText: string;
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({
+export interface ChatInterfaceRef {
+  sendMessage: (message: string) => void;
+}
+
+const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
   messages: externalMessages,
   onSendMessage,
   apiKey,
   transcriptionText
-}) => {
+}, ref) => {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -45,6 +48,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
   // Use RAG messages if available and documents exist, otherwise use external messages
   const displayMessages = documents.length > 0 ? ragMessages : externalMessages;
 
+  // Expose sendMessage method to parent component
+  useImperativeHandle(ref, () => ({
+    sendMessage: (message: string) => {
+      setInputText(message);
+      setTimeout(() => handleSendMessage(message), 100);
+    }
+  }), []);
+
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
     if (scrollAreaRef.current) {
@@ -55,8 +66,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     }
   }, [displayMessages]);
 
-  const handleSendMessage = async () => {
-    if (!inputText.trim()) return;
+  const handleSendMessage = async (messageOverride?: string) => {
+    const messageToSend = messageOverride || inputText.trim();
+    if (!messageToSend) return;
     
     if (!apiKey) {
       toast({
@@ -67,8 +79,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       return;
     }
 
-    const userMessage = inputText.trim();
-    setInputText('');
+    const userMessage = messageToSend;
+    if (!messageOverride) {
+      setInputText('');
+    }
     setIsLoading(true);
 
     try {
@@ -124,6 +138,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       });
     } finally {
       setIsLoading(false);
+      if (messageOverride) {
+        setInputText('');
+      }
     }
   };
 
@@ -179,6 +196,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
           <div className="text-slate-500 italic text-sm text-center py-8">
             <p>Start a conversation with the AI assistant.</p>
             <p className="mt-2">Ask questions about your transcription or upload documents to chat with them.</p>
+            <p className="mt-2 text-xs">💡 Tip: Select text in the transcription to send it directly to the AI</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -262,7 +280,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             disabled={isLoading}
           />
           <Button 
-            onClick={handleSendMessage}
+            onClick={() => handleSendMessage()}
             disabled={!inputText.trim() || isLoading}
             className="bg-blue-600 hover:bg-blue-700"
           >
@@ -272,6 +290,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
     </Card>
   );
-};
+});
+
+ChatInterface.displayName = 'ChatInterface';
 
 export default ChatInterface;

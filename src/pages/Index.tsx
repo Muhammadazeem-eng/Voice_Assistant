@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -37,6 +36,7 @@ const Index = () => {
   const [recordingMode, setRecordingMode] = useState<'microphone' | 'system' | null>(null);
 
   const recordingTimerRef = useRef<NodeJS.Timeout>();
+  const chatInterfaceRef = useRef<{ sendMessage: (message: string) => void }>();
 
   useEffect(() => {
     if (isRecording) {
@@ -75,6 +75,27 @@ const Index = () => {
       timestamp: new Date()
     };
     setChatMessages(prev => [...prev, message]);
+  };
+
+  const handleSendToChat = (selectedText: string) => {
+    if (!config.openaiApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenAI API key to use the chat functionality.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Send the selected text directly to the chat interface
+    if (chatInterfaceRef.current) {
+      chatInterfaceRef.current.sendMessage(selectedText);
+    }
+
+    toast({
+      title: "Text sent to AI",
+      description: "Selected transcription text has been sent to the AI assistant.",
+    });
   };
 
   const clearTranscription = () => {
@@ -226,6 +247,7 @@ const Index = () => {
             <TranscriptionDisplay
               fullTranscription={fullTranscription}
               isRecording={isRecording}
+              onSendToChat={handleSendToChat}
             />
           </div>
 
@@ -233,6 +255,7 @@ const Index = () => {
           <div className="space-y-4">
             <h2 className="text-xl font-semibold text-slate-50">AI Assistant</h2>
             <ChatInterface
+              ref={chatInterfaceRef}
               messages={chatMessages}
               onSendMessage={addChatMessage}
               apiKey={config.openaiApiKey}
