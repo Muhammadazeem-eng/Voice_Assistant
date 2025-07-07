@@ -91,7 +91,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 role: 'system',
                 content: 'You are a helpful AI assistant for meeting transcription and analysis. You can help analyze transcriptions, answer questions about the content, and provide insights.'
               },
-              ...messages.map(msg => ({
+              ...externalMessages.map(msg => ({
                 role: msg.role,
                 content: msg.content
               })),
