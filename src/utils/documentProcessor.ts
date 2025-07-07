@@ -1,4 +1,3 @@
-
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 
@@ -108,10 +107,9 @@ const extractPDFTextEnhanced = async (file: File): Promise<{content: string, det
         console.log(`Processing PDF page ${pageNum}/${pdf.numPages}`);
         const page = await pdf.getPage(pageNum);
         
-        // Get text content
+        // Get text content with correct API parameters
         const textContent = await page.getTextContent({
-          includeMarkedContent: true,
-          disableCombineTextItems: false
+          includeMarkedContent: true
         });
         
         // Check if page has images
@@ -182,12 +180,8 @@ const extractDOCXTextEnhanced = async (file: File): Promise<{content: string, de
     const arrayBuffer = await file.arrayBuffer();
     console.log('DOCX arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Enhanced mammoth options for better text extraction
-    const result = await mammoth.extractRawText({ 
-      arrayBuffer,
-      // Additional options for better text extraction
-      convertImage: mammoth.images.ignoreImage // Ignore images for now, focus on text
-    });
+    // Use correct mammoth API - just pass arrayBuffer directly
+    const result = await mammoth.extractRawText({ arrayBuffer });
     
     console.log('DOCX extraction result:', {
       contentLength: result.value.length,
