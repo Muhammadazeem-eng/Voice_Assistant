@@ -2,7 +2,7 @@
 import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Plus, File, Trash2 } from 'lucide-react';
+import { Plus, File, Trash2, CheckCircle, AlertCircle } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { processDocument, chunkText } from '@/utils/documentProcessor';
 import { supabase } from '@/integrations/supabase/client';
@@ -29,6 +29,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sessionId = getOrCreateSessionId();
 
@@ -46,7 +47,12 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
     }
 
     const file = files[0];
-    if (!file.type.includes('pdf') && !file.type.includes('wordprocessingml')) {
+    const supportedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    if (!supportedTypes.includes(file.type)) {
       toast({
         title: "Invalid file type",
         description: "Please upload PDF or DOCX files only.",
@@ -57,17 +63,32 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 
     setIsProcessing(true);
     setUploadProgress(0);
+    setProcessingStatus('Preparing document...');
 
     try {
-      console.log('Processing document:', file.name, file.type);
+      console.log(`=== Starting document upload process for: ${file.name} ===`);
+      console.log('File details:', {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        lastModified: new Date(file.lastModified).toISOString()
+      });
       
-      // Process document
-      setUploadProgress(20);
+      // Step 1: Process document
+      setUploadProgress(15);
+      setProcessingStatus('Extracting text from document...');
       const processedDoc = await processDocument(file);
-      console.log('Document processed successfully, content length:', processedDoc.content.length);
       
-      // Store document in database
-      setUploadProgress(40);
+      console.log('Document processing completed:', {
+        contentLength: processedDoc.content.length,
+        wordCount: processedDoc.processingDetails?.wordCount,
+        extractionMethod: processedDoc.processingDetails?.extractionMethod
+      });
+      
+      // Step 2: Store document in database
+      setUploadProgress(30);
+      setProcessingStatus('Storing document in database...');
+      
       const { data: docData, error: docError } = await supabase
         .from('documents')
         .insert({
@@ -80,87 +101,197 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
         .select()
         .single();
 
-      if (docError) throw docError;
-      console.log('Document stored in database:', docData.id);
-
-      // Chunk the text
-      setUploadProgress(60);
-      const chunks = chunkText(processedDoc.content);
-      console.log('Generated chunks:', chunks.length);
+      if (docError) {
+        console.error('Database insertion error:', docError);
+        throw docError;
+      }
       
-      // Generate embeddings and store chunks
-      setUploadProgress(80);
-      await processChunks(chunks, docData.id, apiKey);
+      console.log('Document stored in database with ID:', docData.id);
+
+      // Step 3: Generate text chunks
+      setUploadProgress(45);
+      setProcessingStatus('Creating text chunks...');
+      const chunks = chunkText(processedDoc.content, 1000, 200);
+      
+      console.log(`Generated ${chunks.length} text chunks`);
+      
+      if (chunks.length === 0) {
+        throw new Error('No valid text chunks could be created from the document content.');
+      }
+      
+      // Step 4: Process chunks in batches with embeddings
+      setUploadProgress(60);
+      setProcessingStatus('Generating embeddings...');
+      await processChunksWithEmbeddings(chunks, docData.id, apiKey, (progress) => {
+        setUploadProgress(60 + (progress * 35)); // 60-95% for embeddings
+        setProcessingStatus(`Processing embeddings... (${Math.round(progress * 100)}%)`);
+      });
       
       setUploadProgress(100);
+      setProcessingStatus('Upload completed!');
       
       // Update documents list
       onDocumentsChange([...documents, docData]);
       
+      // Verify the document was processed correctly
+      await verifyDocumentProcessing(docData.id);
+      
       toast({
         title: "Document uploaded successfully",
-        description: `${processedDoc.filename} has been processed and is ready for chat.`
+        description: `${processedDoc.filename} has been processed and is ready for chat. ${chunks.length} text chunks created.`,
+        duration: 5000
       });
+
+      console.log(`=== Document upload completed successfully for: ${file.name} ===`);
 
     } catch (error) {
       console.error('Error uploading document:', error);
+      setProcessingStatus('Upload failed');
+      
+      // Provide specific error messages based on error type
+      let errorMessage = error.message || "Failed to process the document. Please try again.";
+      let errorTitle = "Upload failed";
+      
+      if (error.message.includes('image-based')) {
+        errorTitle = "Image-based PDF detected";
+        errorMessage = "This PDF appears to contain mostly images. Please try a PDF with selectable text or convert it to a text-based format.";
+      } else if (error.message.includes('corrupted')) {
+        errorTitle = "File appears corrupted";
+        errorMessage = "The file may be corrupted or password-protected. Please try a different file.";
+      } else if (error.message.includes('API')) {
+        errorTitle = "API Error";
+        errorMessage = "There was an issue with the embedding generation. Please check your API key and try again.";
+      }
+      
       toast({
-        title: "Upload failed",
-        description: error.message || "Failed to process the document. Please try again.",
-        variant: "destructive"
+        title: errorTitle,
+        description: errorMessage,
+        variant: "destructive",
+        duration: 10000
       });
     } finally {
       setIsProcessing(false);
       setUploadProgress(0);
+      setProcessingStatus('');
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const processChunks = async (chunks: string[], documentId: string, apiKey: string) => {
-    const batchSize = 10;
+  const processChunksWithEmbeddings = async (
+    chunks: string[], 
+    documentId: string, 
+    apiKey: string,
+    onProgress?: (progress: number) => void
+  ) => {
+    const batchSize = 5; // Smaller batches for more reliable processing
+    const totalBatches = Math.ceil(chunks.length / batchSize);
+    
+    console.log(`Processing ${chunks.length} chunks in ${totalBatches} batches`);
     
     for (let i = 0; i < chunks.length; i += batchSize) {
       const batch = chunks.slice(i, i + batchSize);
-      console.log(`Processing batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(chunks.length/batchSize)}`);
+      const batchNumber = Math.floor(i / batchSize) + 1;
       
-      // Generate embeddings for batch
-      const embeddingPromises = batch.map(async (chunk, index) => {
-        const response = await fetch('https://api.openai.com/v1/embeddings', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'text-embedding-3-small',
-            input: chunk,
-            encoding_format: 'float'
-          })
+      console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)`);
+      
+      try {
+        // Generate embeddings for batch with retry logic
+        const embeddingPromises = batch.map(async (chunk, index) => {
+          const actualIndex = i + index;
+          
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const response = await fetch('https://api.openai.com/v1/embeddings', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${apiKey}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  model: 'text-embedding-3-small',
+                  input: chunk,
+                  encoding_format: 'float'
+                })
+              });
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => null);
+                throw new Error(`Embedding API error (${response.status}): ${errorData?.error?.message || response.statusText}`);
+              }
+
+              const result = await response.json();
+              return {
+                document_id: documentId,
+                chunk_text: chunk,
+                chunk_index: actualIndex,
+                embedding: result.data[0].embedding
+              };
+            } catch (error) {
+              console.warn(`Embedding attempt ${attempt} failed for chunk ${actualIndex}:`, error.message);
+              if (attempt === 3) throw error;
+              await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+            }
+          }
         });
 
-        if (!response.ok) {
-          throw new Error('Failed to generate embedding');
+        const chunkData = await Promise.all(embeddingPromises);
+        console.log(`Generated embeddings for batch ${batchNumber}`);
+        
+        // Store chunks in database
+        const { error } = await supabase
+          .from('document_chunks')
+          .insert(chunkData);
+
+        if (error) {
+          console.error('Database insertion error for batch', batchNumber, ':', error);
+          throw error;
         }
+        
+        console.log(`Batch ${batchNumber} stored successfully in database`);
+        
+        // Update progress
+        if (onProgress) {
+          onProgress((batchNumber) / totalBatches);
+        }
+        
+        // Small delay between batches to avoid rate limiting
+        if (batchNumber < totalBatches) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+      } catch (error) {
+        console.error(`Error processing batch ${batchNumber}:`, error);
+        throw new Error(`Failed to process document chunks (batch ${batchNumber}): ${error.message}`);
+      }
+    }
+    console.log('All chunks processed and stored successfully');
+  };
 
-        const result = await response.json();
-        return {
-          document_id: documentId,
-          chunk_text: chunk,
-          chunk_index: i + index,
-          embedding: result.data[0].embedding
-        };
-      });
-
-      const chunkData = await Promise.all(embeddingPromises);
-      
-      // Store chunks in database
-      const { error } = await supabase
+  const verifyDocumentProcessing = async (documentId: string) => {
+    try {
+      const { data: chunks, error } = await supabase
         .from('document_chunks')
-        .insert(chunkData);
+        .select('id, chunk_index, chunk_text')
+        .eq('document_id', documentId)
+        .limit(5);
 
       if (error) throw error;
+
+      console.log('Document processing verification:', {
+        documentId,
+        chunksStored: chunks?.length || 0,
+        sampleChunks: chunks?.map(c => ({
+          index: c.chunk_index,
+          textPreview: c.chunk_text.substring(0, 50) + '...'
+        }))
+      });
+
+      if (!chunks || chunks.length === 0) {
+        console.warn('Warning: No chunks found in database after processing');
+      }
+    } catch (error) {
+      console.error('Error verifying document processing:', error);
     }
-    console.log('All chunks processed and stored');
   };
 
   const deleteDocument = async (documentId: string) => {
@@ -215,24 +346,32 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       />
 
       {isProcessing && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Processing document...</span>
-            <span>{Math.round(uploadProgress)}%</span>
+        <div className="space-y-3 p-4 bg-slate-800 rounded-lg border border-slate-600">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-slate-300">{processingStatus}</span>
+            <span className="text-slate-400">{Math.round(uploadProgress)}%</span>
           </div>
           <Progress value={uploadProgress} className="h-2" />
+          {uploadProgress > 0 && uploadProgress < 100 && (
+            <p className="text-xs text-slate-500">
+              This may take a moment depending on document size...
+            </p>
+          )}
         </div>
       )}
 
       <div className="space-y-2">
         {documents.map((doc) => (
-          <div key={doc.id} className="flex items-center justify-between p-2 bg-slate-800 rounded-lg">
-            <div className="flex items-center gap-2">
-              <File className="w-4 h-4 text-slate-400" />
+          <div key={doc.id} className="flex items-center justify-between p-3 bg-slate-800 rounded-lg border border-slate-700">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center">
+                <File className="w-4 h-4 text-slate-400" />
+                <CheckCircle className="w-3 h-3 text-green-500 ml-1" />
+              </div>
               <div>
-                <p className="text-sm text-slate-200">{doc.filename}</p>
+                <p className="text-sm text-slate-200 font-medium">{doc.filename}</p>
                 <p className="text-xs text-slate-400">
-                  {Math.round(doc.file_size / 1024)}KB • {new Date(doc.created_at).toLocaleDateString()}
+                  {Math.round(doc.file_size / 1024)}KB • {new Date(doc.created_at).toLocaleDateString()} • Ready for chat
                 </p>
               </div>
             </div>
@@ -247,10 +386,12 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
           </div>
         ))}
         
-        {documents.length === 0 && (
-          <p className="text-sm text-slate-500 italic text-center py-4">
-            No documents uploaded yet. Add PDFs or DOCX files to chat with them.
-          </p>
+        {documents.length === 0 && !isProcessing && (
+          <div className="text-center py-8 px-4 bg-slate-800/50 rounded-lg border border-slate-700 border-dashed">
+            <File className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+            <p className="text-sm text-slate-400 mb-1">No documents uploaded yet</p>
+            <p className="text-xs text-slate-500">Add PDFs or DOCX files to chat with their content</p>
+          </div>
         )}
       </div>
     </div>

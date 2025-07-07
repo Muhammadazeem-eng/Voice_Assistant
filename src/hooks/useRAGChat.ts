@@ -37,6 +37,7 @@ export const useRAGChat = (apiKey: string) => {
 
   const fetchDocuments = async () => {
     try {
+      console.log('Fetching documents for session:', sessionId);
       const { data, error } = await supabase
         .from('documents')
         .select('*')
@@ -44,6 +45,7 @@ export const useRAGChat = (apiKey: string) => {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
+      console.log('Documents fetched:', data?.length || 0);
       setDocuments(data || []);
     } catch (error) {
       console.error('Error fetching documents:', error);
@@ -68,6 +70,7 @@ export const useRAGChat = (apiKey: string) => {
 
       if (error) throw error;
       setCurrentSessionId(session.id);
+      console.log('Chat session created:', session.id);
     } catch (error) {
       console.error('Error creating session:', error);
       toast({
@@ -79,10 +82,14 @@ export const useRAGChat = (apiKey: string) => {
   };
 
   const searchDocuments = async (query: string) => {
-    if (!apiKey) return [];
+    if (!apiKey) {
+      console.log('No API key provided for document search');
+      return [];
+    }
 
     try {
       console.log('Searching documents for query:', query);
+      console.log('Available documents:', documents.length);
       
       // Generate embedding for the query
       const response = await fetch('https://api.openai.com/v1/embeddings', {
@@ -98,24 +105,46 @@ export const useRAGChat = (apiKey: string) => {
         })
       });
 
-      if (!response.ok) throw new Error('Failed to generate query embedding');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        console.error('Embedding API error:', response.status, errorData);
+        throw new Error(`Failed to generate query embedding: ${response.status}`);
+      }
 
       const embeddingResult = await response.json();
       const queryEmbedding = embeddingResult.data[0].embedding;
+      console.log('Query embedding generated successfully');
 
-      // Search for similar chunks
+      // Search for similar chunks with enhanced parameters
       const { data: chunks, error } = await supabase.rpc('search_document_chunks', {
         query_embedding: queryEmbedding,
-        match_threshold: 0.7,
-        match_count: 5,
+        match_threshold: 0.5, // Lower threshold for better recall
+        match_count: 8, // More results for better context
         session_id_param: sessionId
       });
 
-      if (error) throw error;
-      console.log('Found relevant chunks:', chunks?.length || 0);
+      if (error) {
+        console.error('Database search error:', error);
+        throw error;
+      }
+      
+      console.log('Search results:', {
+        chunksFound: chunks?.length || 0,
+        chunks: chunks?.map(c => ({
+          filename: c.filename,
+          similarity: c.similarity,
+          textPreview: c.chunk_text.substring(0, 100) + '...'
+        }))
+      });
+      
       return chunks || [];
     } catch (error) {
       console.error('Error searching documents:', error);
+      toast({
+        title: "Search Error",
+        description: "Failed to search documents. Please try again.",
+        variant: "destructive"
+      });
       return [];
     }
   };
@@ -131,7 +160,9 @@ export const useRAGChat = (apiKey: string) => {
     }
 
     try {
-      // Add user message
+      console.log('Sending message:', content);
+      
+      // Add user message immediately
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
         role: 'user',
@@ -142,25 +173,56 @@ export const useRAGChat = (apiKey: string) => {
 
       // Search for relevant document chunks
       const relevantChunks = await searchDocuments(content);
-      console.log('Using document chunks:', relevantChunks.length);
+      console.log('Using document chunks for context:', relevantChunks.length);
       
-      // Prepare context for AI
-      let systemPrompt = 'You are a helpful AI assistant for document analysis and meeting transcription.';
-      
+      // Enhanced system prompt with better document context handling
+      let systemPrompt = `You are a helpful AI assistant specializing in document analysis and meeting transcription. You have access to uploaded documents and can provide detailed analysis based on their content.
+
+IMPORTANT INSTRUCTIONS:
+- You have access to specific document content that has been uploaded by the user
+- Always reference the documents when answering questions about their content
+- Be specific about which document you're referencing
+- If information isn't in the provided documents, clearly state that
+- Provide detailed, accurate responses based on the document content`;
+
       if (relevantChunks.length > 0) {
-        const context = relevantChunks
-          .map(chunk => `From "${chunk.filename}": ${chunk.chunk_text}`)
-          .join('\n\n---\n\n');
-        
-        systemPrompt = `You are a helpful AI assistant for document analysis and meeting transcription. You have access to the following document content to help answer questions:
+        const documentContext = relevantChunks
+          .map((chunk, index) => {
+            return `Document: "${chunk.filename}" (Relevance: ${(chunk.similarity * 100).toFixed(1)}%)
+Content: ${chunk.chunk_text}
+
+---`;
+          })
+          .join('\n\n');
+
+        systemPrompt = `You are a helpful AI assistant specializing in document analysis. You have access to the following document content that the user has uploaded:
 
 DOCUMENT CONTEXT:
-${context}
+${documentContext}
 
-Use this context to provide accurate and detailed answers. If the user asks about information in the documents, reference the specific document and provide relevant details. If the information is not in the provided context, let the user know that the information is not available in the uploaded documents.`;
+INSTRUCTIONS:
+- Use the above document content to answer the user's questions
+- Always specify which document you're referencing when providing information
+- Be detailed and accurate in your responses
+- If the user asks about information not found in these documents, clearly state that the information is not available in the uploaded documents
+- When referencing documents, mention the filename and provide specific details from the content
+- The documents are provided in order of relevance to the user's question`;
+
+        console.log('Enhanced system prompt created with', relevantChunks.length, 'document chunks');
+      } else {
+        console.log('No relevant document chunks found, using basic system prompt');
       }
 
-      // Call OpenAI API
+      // Prepare conversation history
+      const conversationMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages.slice(-6).map(msg => ({ role: msg.role, content: msg.content })), // Last 6 messages for context
+        { role: 'user', content }
+      ];
+
+      console.log('Calling OpenAI API with', conversationMessages.length, 'messages');
+
+      // Call OpenAI API with enhanced parameters
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -169,51 +231,63 @@ Use this context to provide accurate and detailed answers. If the user asks abou
         },
         body: JSON.stringify({
           model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages.map(msg => ({ role: msg.role, content: msg.content })),
-            { role: 'user', content }
-          ],
-          max_tokens: 1500,
-          temperature: 0.7
+          messages: conversationMessages,
+          max_tokens: 2000, // Increased for more detailed responses
+          temperature: 0.3, // Lower temperature for more focused, factual responses
+          top_p: 0.9,
+          frequency_penalty: 0.1,
+          presence_penalty: 0.1
         })
       });
 
-      if (!response.ok) throw new Error('API request failed');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        console.error('OpenAI API error:', response.status, errorData);
+        throw new Error(`API request failed: ${response.status} ${errorData?.error?.message || response.statusText}`);
+      }
 
       const data = await response.json();
+      const assistantContent = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+      
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.choices[0]?.message?.content || 'Sorry, I could not generate a response.',
+        content: assistantContent,
         timestamp: new Date(),
-        documentContext: relevantChunks
+        documentContext: relevantChunks.length > 0 ? relevantChunks : undefined
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+      console.log('Assistant response generated successfully');
 
       // Store messages in database
-      await supabase.from('chat_messages').insert([
-        {
-          session_id: currentSessionId,
-          role: 'user',
-          content,
-          document_context: null
-        },
-        {
-          session_id: currentSessionId,
-          role: 'assistant',
-          content: assistantMessage.content,
-          document_context: relevantChunks
-        }
-      ]);
+      try {
+        await supabase.from('chat_messages').insert([
+          {
+            session_id: currentSessionId,
+            role: 'user',
+            content,
+            document_context: null
+          },
+          {
+            session_id: currentSessionId,
+            role: 'assistant',
+            content: assistantContent,
+            document_context: relevantChunks.length > 0 ? relevantChunks : null
+          }
+        ]);
+        console.log('Messages stored in database');
+      } catch (dbError) {
+        console.error('Error storing messages:', dbError);
+        // Don't throw here, as the conversation still worked
+      }
 
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: ChatMessage = {
         id: (Date.now() + 2).toString(),
         role: 'assistant',
-        content: 'Sorry, I encountered an error while processing your request.',
+        content: `Sorry, I encountered an error while processing your request: ${error.message}`,
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
