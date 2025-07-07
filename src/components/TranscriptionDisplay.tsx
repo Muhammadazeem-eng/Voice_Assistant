@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -32,6 +31,7 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
   
   const transcriptionRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
@@ -59,17 +59,50 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
     console.log('Text selected:', selectedText); // Debug log
     setSelectedText(selectedText);
 
-    // Calculate popup position
-    const rect = range.getBoundingClientRect();
-    const containerRect = transcriptionRef.current.getBoundingClientRect();
+    // Get the scroll area container
+    const scrollContainer = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+    if (!scrollContainer || !transcriptionRef.current) {
+      return;
+    }
+
+    // Calculate popup position relative to the scrollable container
+    const range = selection.getRangeAt(0);
+    const selectionRect = range.getBoundingClientRect();
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const transcriptionRect = transcriptionRef.current.getBoundingClientRect();
     
-    // Position popup above the selected text
-    const top = rect.top - containerRect.top - 50;
-    const left = rect.left - containerRect.left + (rect.width / 2) - 60; // Center the popup
+    // Calculate position relative to the transcription container
+    const relativeTop = selectionRect.top - transcriptionRect.top;
+    const relativeLeft = selectionRect.left - transcriptionRect.left;
+    
+    // Position popup above the selected text, but keep it within bounds
+    let top = relativeTop - 60;
+    let left = relativeLeft + (selectionRect.width / 2) - 60; // Center the popup
+    
+    // Boundary checking - keep popup within the transcription container
+    const containerHeight = transcriptionRect.height;
+    const containerWidth = transcriptionRect.width;
+    
+    // Ensure popup doesn't go above the container
+    if (top < 10) {
+      top = relativeTop + selectionRect.height + 10; // Position below selection instead
+    }
+    
+    // Ensure popup doesn't go below the container
+    if (top > containerHeight - 70) {
+      top = containerHeight - 70;
+    }
+    
+    // Ensure popup stays within horizontal bounds
+    if (left < 10) {
+      left = 10;
+    } else if (left > containerWidth - 130) {
+      left = containerWidth - 130;
+    }
 
     setPopupPosition({
-      top: Math.max(10, top), // Ensure it doesn't go above the container
-      left: Math.max(10, Math.min(left, containerRect.width - 130)), // Keep within bounds
+      top,
+      left,
       visible: true
     });
   }, []);
@@ -129,10 +162,10 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
               )}
             </div>
           </div>
-          <ScrollArea className="h-64 relative">
+          <ScrollArea className="h-64 max-h-[400px] relative" ref={scrollAreaRef}>
             <div 
               ref={transcriptionRef}
-              className="text-slate-300 text-sm leading-relaxed select-text cursor-text"
+              className="text-slate-300 text-sm leading-relaxed select-text cursor-text relative pr-4"
               style={{ userSelect: 'text' }}
             >
               {fullTranscription || (
@@ -143,37 +176,37 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
               {isRecording && fullTranscription && (
                 <span className="inline-block w-2 h-4 bg-slate-400 ml-1 animate-pulse" />
               )}
-            </div>
 
-            {/* Floating Send to AI Popup */}
-            {popupPosition.visible && onSendToChat && selectedText.trim() && (
-              <div
-                ref={popupRef}
-                className="absolute z-50 animate-in fade-in-0 scale-in-95 duration-200"
-                style={{
-                  top: `${popupPosition.top}px`,
-                  left: `${popupPosition.left}px`,
-                }}
-              >
-                <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-lg p-2">
-                  <Button
-                    size="sm"
-                    onClick={handleSendToChat}
-                    className="bg-blue-600 hover:bg-blue-700 text-white text-xs gap-1 h-8"
-                  >
-                    <Send className="w-3 h-3" />
-                    Send to AI
-                  </Button>
-                  <div className="text-xs text-slate-400 mt-1 max-w-32 truncate">
-                    "{selectedText.length > 20 ? selectedText.substring(0, 20) + '...' : selectedText}"
+              {/* Floating Send to AI Popup */}
+              {popupPosition.visible && onSendToChat && selectedText.trim() && (
+                <div
+                  ref={popupRef}
+                  className="absolute z-50 animate-in fade-in-0 scale-in-95 duration-200"
+                  style={{
+                    top: `${popupPosition.top}px`,
+                    left: `${popupPosition.left}px`,
+                  }}
+                >
+                  <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-lg p-2">
+                    <Button
+                      size="sm"
+                      onClick={handleSendToChat}
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs gap-1 h-8"
+                    >
+                      <Send className="w-3 h-3" />
+                      Send to AI
+                    </Button>
+                    <div className="text-xs text-slate-400 mt-1 max-w-32 truncate">
+                      "{selectedText.length > 20 ? selectedText.substring(0, 20) + '...' : selectedText}"
+                    </div>
+                  </div>
+                  {/* Arrow pointing down to selected text */}
+                  <div className="absolute top-full left-1/2 transform -translate-x-1/2">
+                    <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-600"></div>
                   </div>
                 </div>
-                {/* Arrow pointing down to selected text */}
-                <div className="absolute top-full left-1/2 transform -translate-x-1/2">
-                  <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-600"></div>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </ScrollArea>
         </div>
       </Card>
