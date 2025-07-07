@@ -72,8 +72,6 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
       verbosity: 0,
-      // Disable worker for better compatibility in some environments
-      disableWorker: false,
       // Add error recovery options
       stopAtErrors: false
     }).promise;
