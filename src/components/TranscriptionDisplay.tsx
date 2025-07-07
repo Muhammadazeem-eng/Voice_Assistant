@@ -56,6 +56,7 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
       return;
     }
 
+    console.log('Text selected:', selectedText); // Debug log
     setSelectedText(selectedText);
 
     // Calculate popup position
@@ -75,6 +76,9 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
 
   const handleSendToChat = useCallback(() => {
     if (selectedText.trim() && onSendToChat) {
+      console.log('Sending selected text to chat:', selectedText); // Debug log
+      
+      // Send only the selected text with a simple prompt
       const prompt = `Please analyze this part of the transcription: "${selectedText}"`;
       onSendToChat(prompt);
       
@@ -142,7 +146,7 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
             </div>
 
             {/* Floating Send to AI Popup */}
-            {popupPosition.visible && onSendToChat && (
+            {popupPosition.visible && onSendToChat && selectedText.trim() && (
               <div
                 ref={popupRef}
                 className="absolute z-50 animate-in fade-in-0 scale-in-95 duration-200"

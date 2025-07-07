@@ -1,10 +1,11 @@
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
-import { Send, FileText, File } from 'lucide-react';
+import { Send, File } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import DocumentUpload from './DocumentUpload';
 import { useRAGChat } from '@/hooks/useRAGChat';
@@ -144,20 +145,6 @@ const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
     }
   };
 
-  const insertTranscription = () => {
-    if (!transcriptionText.trim()) {
-      toast({
-        title: "No transcription available",
-        description: "Start recording or upload a file to generate transcription text.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    const transcriptionPrompt = `Please analyze this meeting transcription:\n\n"${transcriptionText}"\n\nWhat are the key points and action items?`;
-    setInputText(transcriptionPrompt);
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -253,19 +240,6 @@ const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
       </ScrollArea>
 
       <div className="p-4 border-t border-slate-700">
-        <div className="flex gap-2 mb-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={insertTranscription}
-            disabled={!transcriptionText.trim()}
-            className="border-slate-600 text-slate-300 hover:bg-slate-800"
-          >
-            <FileText className="w-4 h-4 mr-1" />
-            Insert Transcription
-          </Button>
-        </div>
-        
         <div className="flex gap-2">
           <Input
             value={inputText}
