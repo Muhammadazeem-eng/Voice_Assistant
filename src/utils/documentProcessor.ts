@@ -2,11 +2,14 @@ import mammoth from 'mammoth';
 import { pdfjs } from 'react-pdf';
 
 // Configure react-pdf worker with a more reliable approach
-// Use the bundled worker from the installed pdfjs-dist package
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.js',
-  import.meta.url,
-).toString();
+// Use a simpler worker configuration that works across different environments
+try {
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+} catch (error) {
+  console.warn('Failed to set PDF worker source:', error);
+  // Fallback to local worker if available
+  pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+}
 
 export interface ProcessedDocument {
   content: string;
@@ -72,26 +75,11 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Initialize PDF.js with better error handling
-    let pdf;
-    try {
-      pdf = await pdfjs.getDocument({ 
-        data: arrayBuffer,
-        useSystemFonts: true,
-        disableFontFace: false,
-        cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
-        cMapPacked: true,
-      }).promise;
-    } catch (workerError) {
-      console.error('PDF.js initialization failed, trying fallback:', workerError);
-      
-      // Fallback: try with simpler configuration
-      pdf = await pdfjs.getDocument({ 
-        data: arrayBuffer,
-        useSystemFonts: true,
-        disableFontFace: true,
-      }).promise;
-    }
+    // Simplified PDF.js initialization
+    const pdf = await pdfjs.getDocument({ 
+      data: arrayBuffer,
+      useSystemFonts: true,
+    }).promise;
     
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
@@ -158,8 +146,6 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
       throw new Error('PDF is password-protected. Please provide an unprotected file.');
     } else if (error.message.includes('image-based')) {
       throw error; // Re-throw our custom message
-    } else if (error.message.includes('worker') || error.message.includes('fetch')) {
-      throw new Error('PDF processing service temporarily unavailable. Please try again in a moment.');
     } else {
       throw new Error(`PDF processing failed: ${error.message}`);
     }
