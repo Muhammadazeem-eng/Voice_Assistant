@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -49,8 +50,8 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
     }
 
     // Check if selection is within our transcription area
-    const range = selection.getRangeAt(0);
-    if (!transcriptionRef.current?.contains(range.commonAncestorContainer)) {
+    const selectionRange = selection.getRangeAt(0);
+    if (!transcriptionRef.current?.contains(selectionRange.commonAncestorContainer)) {
       setPopupPosition(prev => ({ ...prev, visible: false }));
       setSelectedText('');
       return;
@@ -66,8 +67,8 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
     }
 
     // Calculate popup position relative to the scrollable container
-    const range = selection.getRangeAt(0);
-    const selectionRect = range.getBoundingClientRect();
+    const positionRange = selection.getRangeAt(0);
+    const selectionRect = positionRange.getBoundingClientRect();
     const containerRect = scrollContainer.getBoundingClientRect();
     const transcriptionRect = transcriptionRef.current.getBoundingClientRect();
     
