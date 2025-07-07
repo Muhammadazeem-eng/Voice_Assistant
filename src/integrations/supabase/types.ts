@@ -51,25 +51,25 @@ export type Database = {
       }
       chat_sessions: {
         Row: {
+          browser_session_id: string
           created_at: string
           id: string
           session_name: string
           updated_at: string
-          user_id: string
         }
         Insert: {
+          browser_session_id?: string
           created_at?: string
           id?: string
           session_name?: string
           updated_at?: string
-          user_id: string
         }
         Update: {
+          browser_session_id?: string
           created_at?: string
           id?: string
           session_name?: string
           updated_at?: string
-          user_id?: string
         }
         Relationships: []
       }
@@ -116,7 +116,7 @@ export type Database = {
           file_type: string
           filename: string
           id: string
-          user_id: string
+          session_id: string
         }
         Insert: {
           content: string
@@ -125,7 +125,7 @@ export type Database = {
           file_type: string
           filename: string
           id?: string
-          user_id: string
+          session_id?: string
         }
         Update: {
           content?: string
@@ -134,7 +134,7 @@ export type Database = {
           file_type?: string
           filename?: string
           id?: string
-          user_id?: string
+          session_id?: string
         }
         Relationships: []
       }
@@ -200,12 +200,19 @@ export type Database = {
         Returns: unknown
       }
       search_document_chunks: {
-        Args: {
-          query_embedding: string
-          match_threshold?: number
-          match_count?: number
-          user_id_param?: string
-        }
+        Args:
+          | {
+              query_embedding: string
+              match_threshold?: number
+              match_count?: number
+              session_id_param?: string
+            }
+          | {
+              query_embedding: string
+              match_threshold?: number
+              match_count?: number
+              user_id_param?: string
+            }
         Returns: {
           id: string
           document_id: string

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { getOrCreateSessionId } from '@/utils/sessionUtils';
 
 interface ChatMessage {
   id: string;
@@ -23,47 +24,24 @@ export const useRAGChat = (apiKey: string) => {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [user, setUser] = useState<any>(null);
+  const [sessionId] = useState<string>(getOrCreateSessionId());
 
   useEffect(() => {
-    // Check authentication status
-    const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUser(user);
-      
-      if (user) {
-        await fetchDocuments();
-        await createOrGetSession();
-      }
+    // Initialize session and fetch documents
+    const initializeSession = async () => {
+      await fetchDocuments();
+      await createOrGetSession();
     };
 
-    checkUser();
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setUser(session?.user || null);
-        if (session?.user) {
-          await fetchDocuments();
-          await createOrGetSession();
-        } else {
-          setDocuments([]);
-          setCurrentSessionId(null);
-          setMessages([]);
-        }
-      }
-    );
-
-    return () => subscription.unsubscribe();
+    initializeSession();
   }, []);
 
   const fetchDocuments = async () => {
-    if (!user) return;
-
     try {
       const { data, error } = await supabase
         .from('documents')
         .select('*')
+        .eq('session_id', sessionId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -79,14 +57,12 @@ export const useRAGChat = (apiKey: string) => {
   };
 
   const createOrGetSession = async () => {
-    if (!user) return;
-
     try {
       const { data: session, error } = await supabase
         .from('chat_sessions')
         .insert({
           session_name: `Session ${new Date().toLocaleString()}`,
-          user_id: user.id
+          browser_session_id: sessionId
         })
         .select()
         .single();
@@ -97,14 +73,14 @@ export const useRAGChat = (apiKey: string) => {
       console.error('Error creating session:', error);
       toast({
         title: "Session Error",
-        description: "Please sign in to use the RAG chat functionality.",
+        description: "Failed to create chat session.",
         variant: "destructive"
       });
     }
   };
 
   const searchDocuments = async (query: string) => {
-    if (!apiKey || !user) return [];
+    if (!apiKey) return [];
 
     try {
       // Generate embedding for the query
@@ -130,7 +106,8 @@ export const useRAGChat = (apiKey: string) => {
       const { data: chunks, error } = await supabase.rpc('search_document_chunks', {
         query_embedding: queryEmbedding,
         match_threshold: 0.7,
-        match_count: 5
+        match_count: 5,
+        session_id_param: sessionId
       });
 
       if (error) throw error;
@@ -142,10 +119,10 @@ export const useRAGChat = (apiKey: string) => {
   };
 
   const sendMessage = async (content: string) => {
-    if (!currentSessionId || !apiKey || !user) {
+    if (!currentSessionId || !apiKey) {
       toast({
-        title: "Authentication Required",
-        description: "Please sign in to use the chat functionality.",
+        title: "Configuration Required",
+        description: "Please configure your OpenAI API key to use the chat functionality.",
         variant: "destructive"
       });
       return;
@@ -248,7 +225,7 @@ export const useRAGChat = (apiKey: string) => {
     setMessages,
     sendMessage,
     currentSessionId,
-    user,
-    isAuthenticated: !!user
+    sessionId,
+    isAuthenticated: true // Always true since no auth required
   };
 };

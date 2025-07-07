@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -38,13 +39,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     documents, 
     setDocuments, 
     messages: ragMessages, 
-    sendMessage: sendRAGMessage,
-    user,
-    isAuthenticated
+    sendMessage: sendRAGMessage
   } = useRAGChat(apiKey);
 
-  // Use RAG messages if available and user is authenticated, otherwise use external messages
-  const displayMessages = isAuthenticated && ragMessages.length > 0 ? ragMessages : externalMessages;
+  // Use RAG messages if available and documents exist, otherwise use external messages
+  const displayMessages = documents.length > 0 ? ragMessages : externalMessages;
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -73,8 +72,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setIsLoading(true);
 
     try {
-      // Use RAG-enabled send message if we have documents and user is authenticated
-      if (documents.length > 0 && isAuthenticated) {
+      // Use RAG-enabled send message if we have documents
+      if (documents.length > 0) {
         await sendRAGMessage(userMessage);
       } else {
         // Fallback to original chat logic
@@ -179,7 +178,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
         {displayMessages.length === 0 ? (
           <div className="text-slate-500 italic text-sm text-center py-8">
             <p>Start a conversation with the AI assistant.</p>
-            <p className="mt-2">Ask questions about your transcription or uploaded documents.</p>
+            <p className="mt-2">Ask questions about your transcription or upload documents to chat with them.</p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -255,7 +254,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={
-              isAuthenticated && documents.length > 0 
+              documents.length > 0 
                 ? "Ask about the transcription or your documents..."
                 : "Ask about the transcription..."
             }
