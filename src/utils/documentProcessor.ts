@@ -1,8 +1,12 @@
 import mammoth from 'mammoth';
 import { pdfjs } from 'react-pdf';
 
-// Configure react-pdf worker with proper version matching
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+// Configure react-pdf worker with a more reliable approach
+// Use the bundled worker from the installed pdfjs-dist package
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.js',
+  import.meta.url,
+).toString();
 
 export interface ProcessedDocument {
   content: string;
@@ -62,21 +66,39 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 };
 
 const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting PDF text extraction with pdfjs-dist for:', file.name);
+  console.log('Starting PDF text extraction with react-pdf for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Use pdfjs directly through the react-pdf's pdfjs export
-    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    // Initialize PDF.js with better error handling
+    let pdf;
+    try {
+      pdf = await pdfjs.getDocument({ 
+        data: arrayBuffer,
+        useSystemFonts: true,
+        disableFontFace: false,
+        cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjs.version}/cmaps/`,
+        cMapPacked: true,
+      }).promise;
+    } catch (workerError) {
+      console.error('PDF.js initialization failed, trying fallback:', workerError);
+      
+      // Fallback: try with simpler configuration
+      pdf = await pdfjs.getDocument({ 
+        data: arrayBuffer,
+        useSystemFonts: true,
+        disableFontFace: true,
+      }).promise;
+    }
     
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
     let fullText = '';
     let successfulPages = 0;
     
-    // Extract text from each page
+    // Extract text from each page with better error handling
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       try {
         const page = await pdf.getPage(pageNum);
@@ -136,6 +158,8 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
       throw new Error('PDF is password-protected. Please provide an unprotected file.');
     } else if (error.message.includes('image-based')) {
       throw error; // Re-throw our custom message
+    } else if (error.message.includes('worker') || error.message.includes('fetch')) {
+      throw new Error('PDF processing service temporarily unavailable. Please try again in a moment.');
     } else {
       throw new Error(`PDF processing failed: ${error.message}`);
     }
