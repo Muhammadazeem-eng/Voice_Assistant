@@ -1,6 +1,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from '@/hooks/use-toast';
 
 interface ChatMessage {
   id: string;
@@ -22,13 +23,43 @@ export const useRAGChat = (apiKey: string) => {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
-    fetchDocuments();
-    createOrGetSession();
+    // Check authentication status
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+      
+      if (user) {
+        await fetchDocuments();
+        await createOrGetSession();
+      }
+    };
+
+    checkUser();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        setUser(session?.user || null);
+        if (session?.user) {
+          await fetchDocuments();
+          await createOrGetSession();
+        } else {
+          setDocuments([]);
+          setCurrentSessionId(null);
+          setMessages([]);
+        }
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const fetchDocuments = async () => {
+    if (!user) return;
+
     try {
       const { data, error } = await supabase
         .from('documents')
@@ -39,16 +70,23 @@ export const useRAGChat = (apiKey: string) => {
       setDocuments(data || []);
     } catch (error) {
       console.error('Error fetching documents:', error);
+      toast({
+        title: "Error fetching documents",
+        description: "Please try refreshing the page.",
+        variant: "destructive"
+      });
     }
   };
 
   const createOrGetSession = async () => {
+    if (!user) return;
+
     try {
       const { data: session, error } = await supabase
         .from('chat_sessions')
         .insert({
           session_name: `Session ${new Date().toLocaleString()}`,
-          user_id: (await supabase.auth.getUser()).data.user?.id
+          user_id: user.id
         })
         .select()
         .single();
@@ -57,11 +95,16 @@ export const useRAGChat = (apiKey: string) => {
       setCurrentSessionId(session.id);
     } catch (error) {
       console.error('Error creating session:', error);
+      toast({
+        title: "Session Error",
+        description: "Please sign in to use the RAG chat functionality.",
+        variant: "destructive"
+      });
     }
   };
 
   const searchDocuments = async (query: string) => {
-    if (!apiKey) return [];
+    if (!apiKey || !user) return [];
 
     try {
       // Generate embedding for the query
@@ -99,7 +142,14 @@ export const useRAGChat = (apiKey: string) => {
   };
 
   const sendMessage = async (content: string) => {
-    if (!currentSessionId || !apiKey) return;
+    if (!currentSessionId || !apiKey || !user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please sign in to use the chat functionality.",
+        variant: "destructive"
+      });
+      return;
+    }
 
     try {
       // Add user message
@@ -182,6 +232,12 @@ export const useRAGChat = (apiKey: string) => {
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
+      
+      toast({
+        title: "Error",
+        description: "Failed to send message. Please try again.",
+        variant: "destructive"
+      });
     }
   };
 
@@ -191,6 +247,8 @@ export const useRAGChat = (apiKey: string) => {
     messages,
     setMessages,
     sendMessage,
-    currentSessionId
+    currentSessionId,
+    user,
+    isAuthenticated: !!user
   };
 };

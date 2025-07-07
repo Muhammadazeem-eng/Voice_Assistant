@@ -38,11 +38,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     documents, 
     setDocuments, 
     messages: ragMessages, 
-    sendMessage: sendRAGMessage 
+    sendMessage: sendRAGMessage,
+    user,
+    isAuthenticated
   } = useRAGChat(apiKey);
 
-  // Use RAG messages if available, otherwise use external messages
-  const displayMessages = ragMessages.length > 0 ? ragMessages : externalMessages;
+  // Use RAG messages if available and user is authenticated, otherwise use external messages
+  const displayMessages = isAuthenticated && ragMessages.length > 0 ? ragMessages : externalMessages;
 
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
@@ -71,8 +73,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
     setIsLoading(true);
 
     try {
-      // Use RAG-enabled send message if we have documents
-      if (documents.length > 0) {
+      // Use RAG-enabled send message if we have documents and user is authenticated
+      if (documents.length > 0 && isAuthenticated) {
         await sendRAGMessage(userMessage);
       } else {
         // Fallback to original chat logic
@@ -252,7 +254,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Ask about the transcription or your documents..."
+            placeholder={
+              isAuthenticated && documents.length > 0 
+                ? "Ask about the transcription or your documents..."
+                : "Ask about the transcription..."
+            }
             className="bg-slate-800 border-slate-600 text-slate-50 flex-1"
             disabled={isLoading}
           />

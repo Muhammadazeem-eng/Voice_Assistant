@@ -2,10 +2,11 @@
 import React, { useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { Plus, File, Trash2 } from 'lucide-react';
+import { Plus, File, Trash2, AlertCircle } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
 import { processDocument, chunkText } from '@/utils/documentProcessor';
 import { supabase } from '@/integrations/supabase/client';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface Document {
   id: string;
@@ -28,11 +29,38 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [user, setUser] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check user authentication
+  React.useEffect(() => {
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+    };
+    checkUser();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setUser(session?.user || null);
+      }
+    );
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+
+    if (!user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please sign in to upload documents.",
+        variant: "destructive"
+      });
+      return;
+    }
 
     if (!apiKey) {
       toast({
@@ -70,7 +98,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
           file_type: processedDoc.fileType,
           file_size: processedDoc.fileSize,
           content: processedDoc.content,
-          user_id: (await supabase.auth.getUser()).data.user?.id
+          user_id: user.id
         })
         .select()
         .single();
@@ -99,7 +127,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       console.error('Error uploading document:', error);
       toast({
         title: "Upload failed",
-        description: "Failed to process the document. Please try again.",
+        description: error.message || "Failed to process the document. Please try again.",
         variant: "destructive"
       });
     } finally {
@@ -155,6 +183,15 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
   };
 
   const deleteDocument = async (documentId: string) => {
+    if (!user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please sign in to delete documents.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     try {
       const { error } = await supabase
         .from('documents')
@@ -178,6 +215,23 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       });
     }
   };
+
+  if (!user) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h4 className="font-medium text-slate-200">Documents</h4>
+        </div>
+        
+        <Alert>
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>
+            Please sign in to upload and chat with documents.
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
