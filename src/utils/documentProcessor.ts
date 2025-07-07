@@ -1,5 +1,9 @@
 
 import mammoth from 'mammoth';
+import * as pdfjsLib from 'pdfjs-dist';
+
+// Configure PDF.js worker for browser environment
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 export interface ProcessedDocument {
   content: string;
@@ -58,37 +62,64 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 };
 
 const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting simple PDF extraction for:', file.name);
+  console.log('Starting PDF text extraction for:', file.name);
   
   try {
-    // Use dynamic import to load pdf-parse
-    const pdfParse = (await import('pdf-parse')).default;
-    
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = new Uint8Array(arrayBuffer);
+    console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    console.log('PDF buffer size:', buffer.length);
+    // Load PDF document
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      verbosity: 0 // Reduce console noise
+    });
     
-    // Parse PDF with pdf-parse (much simpler and more reliable)
-    const pdfData = await pdfParse(buffer);
+    const pdf = await loadingTask.promise;
+    console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
-    console.log(`PDF parsed successfully. Pages: ${pdfData.numpages}, Text length: ${pdfData.text.length}`);
+    let fullText = '';
     
-    if (!pdfData.text || pdfData.text.trim().length === 0) {
-      throw new Error('No text content found in PDF. This may be an image-based PDF that requires OCR.');
+    // Extract text from each page
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      try {
+        const page = await pdf.getPage(pageNum);
+        const textContent = await page.getTextContent();
+        
+        // Combine text items from the page
+        const pageText = textContent.items
+          .filter((item: any) => item.str && typeof item.str === 'string')
+          .map((item: any) => item.str.trim())
+          .filter((text: string) => text.length > 0)
+          .join(' ');
+        
+        if (pageText.trim()) {
+          fullText += pageText + '\n\n';
+        }
+        
+        console.log(`Page ${pageNum}: ${pageText.length} characters extracted`);
+      } catch (pageError) {
+        console.warn(`Error processing page ${pageNum}:`, pageError);
+        // Continue with other pages
+      }
     }
     
     // Clean up the extracted text
-    const cleanedText = pdfData.text
+    const cleanedText = fullText
       .replace(/\s+/g, ' ')
       .replace(/\n\s*\n/g, '\n\n')
       .trim();
     
+    console.log(`PDF text extraction completed: ${cleanedText.length} characters total`);
+    
+    if (!cleanedText || cleanedText.length < 10) {
+      throw new Error('No readable text content found in PDF. This may be an image-based PDF that requires OCR.');
+    }
+    
     return {
       content: cleanedText,
       details: {
-        extractionMethod: 'pdf-parse library',
-        pageCount: pdfData.numpages,
+        extractionMethod: 'PDF.js browser extraction',
+        pageCount: pdf.numPages,
         totalTextLength: cleanedText.length
       }
     };
@@ -96,11 +127,11 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
   } catch (error) {
     console.error('PDF extraction failed:', error);
     
-    if (error.message.includes('Invalid PDF')) {
+    if (error.message.includes('Invalid PDF') || error.message.includes('corrupted')) {
       throw new Error('This file does not appear to be a valid PDF document.');
     } else if (error.message.includes('password') || error.message.includes('encrypted')) {
       throw new Error('This PDF is password-protected. Please provide an unprotected PDF file.');
-    } else if (error.message.includes('image-based')) {
+    } else if (error.message.includes('image-based') || error.message.includes('OCR')) {
       throw error; // Re-throw our custom message
     } else {
       throw new Error(`PDF processing failed: ${error.message}`);
