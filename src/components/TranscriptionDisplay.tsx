@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -35,15 +34,21 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const handleTextSelection = useCallback(() => {
+    console.log('Text selection triggered'); // Debug log
+    
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0) {
+      console.log('No selection found'); // Debug log
       setPopupPosition(prev => ({ ...prev, visible: false }));
       setSelectedText('');
       return;
     }
 
     const selectedText = selection.toString().trim();
-    if (!selectedText) {
+    console.log('Selected text:', selectedText); // Debug log
+    
+    if (!selectedText || selectedText.length < 2) {
+      console.log('Selected text too short or empty'); // Debug log
       setPopupPosition(prev => ({ ...prev, visible: false }));
       setSelectedText('');
       return;
@@ -51,92 +56,136 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
 
     // Check if selection is within our transcription area
     const selectionRange = selection.getRangeAt(0);
-    if (!transcriptionRef.current?.contains(selectionRange.commonAncestorContainer)) {
+    const commonAncestor = selectionRange.commonAncestorContainer;
+    const isWithinTranscription = transcriptionRef.current?.contains(commonAncestor) || 
+                                 transcriptionRef.current?.contains(commonAncestor.parentElement);
+    
+    if (!isWithinTranscription) {
+      console.log('Selection not within transcription area'); // Debug log
       setPopupPosition(prev => ({ ...prev, visible: false }));
       setSelectedText('');
       return;
     }
 
-    console.log('Text selected:', selectedText); // Debug log
+    console.log('Valid text selection found:', selectedText); // Debug log
     setSelectedText(selectedText);
 
     // Get the scroll area container
     const scrollContainer = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
     if (!scrollContainer || !transcriptionRef.current) {
+      console.log('Missing scroll container or transcription ref'); // Debug log
       return;
     }
 
-    // Calculate popup position relative to the scrollable container
-    const positionRange = selection.getRangeAt(0);
-    const selectionRect = positionRange.getBoundingClientRect();
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const transcriptionRect = transcriptionRef.current.getBoundingClientRect();
-    
-    // Calculate position relative to the transcription container
-    const relativeTop = selectionRect.top - transcriptionRect.top;
-    const relativeLeft = selectionRect.left - transcriptionRect.left;
-    
-    // Position popup above the selected text, but keep it within bounds
-    let top = relativeTop - 60;
-    let left = relativeLeft + (selectionRect.width / 2) - 60; // Center the popup
-    
-    // Boundary checking - keep popup within the transcription container
-    const containerHeight = transcriptionRect.height;
-    const containerWidth = transcriptionRect.width;
-    
-    // Ensure popup doesn't go above the container
-    if (top < 10) {
-      top = relativeTop + selectionRect.height + 10; // Position below selection instead
-    }
-    
-    // Ensure popup doesn't go below the container
-    if (top > containerHeight - 70) {
-      top = containerHeight - 70;
-    }
-    
-    // Ensure popup stays within horizontal bounds
-    if (left < 10) {
-      left = 10;
-    } else if (left > containerWidth - 130) {
-      left = containerWidth - 130;
-    }
+    // Calculate popup position more reliably
+    try {
+      const positionRange = selection.getRangeAt(0);
+      const selectionRect = positionRange.getBoundingClientRect();
+      const transcriptionRect = transcriptionRef.current.getBoundingClientRect();
+      
+      // Calculate position relative to the transcription container
+      const relativeTop = selectionRect.top - transcriptionRect.top + scrollContainer.scrollTop;
+      const relativeLeft = selectionRect.left - transcriptionRect.left;
+      
+      // Position popup above the selected text by default
+      let top = relativeTop - 70;
+      let left = relativeLeft + (selectionRect.width / 2) - 60; // Center the popup
+      
+      // Boundary checking - keep popup within the transcription container
+      const containerHeight = transcriptionRect.height;
+      const containerWidth = transcriptionRect.width;
+      
+      // If popup would go above container, position it below selection
+      if (top < 10) {
+        top = relativeTop + selectionRect.height + 10;
+      }
+      
+      // If popup would go below visible area, position it above
+      if (top > containerHeight - 80) {
+        top = Math.max(10, relativeTop - 70);
+      }
+      
+      // Horizontal boundary checking
+      if (left < 10) {
+        left = 10;
+      } else if (left > containerWidth - 130) {
+        left = containerWidth - 130;
+      }
 
-    setPopupPosition({
-      top,
-      left,
-      visible: true
-    });
+      console.log('Setting popup position:', { top, left }); // Debug log
+      
+      setPopupPosition({
+        top,
+        left,
+        visible: true
+      });
+    } catch (error) {
+      console.error('Error calculating popup position:', error);
+      setPopupPosition(prev => ({ ...prev, visible: false }));
+    }
   }, []);
 
-  const handleSendToChat = useCallback(() => {
-    if (selectedText.trim() && onSendToChat) {
-      console.log('Sending selected text to chat:', selectedText); // Debug log
-      
-      // Send only the selected text with a simple prompt
-      const prompt = `Please analyze this part of the transcription: "${selectedText}"`;
-      onSendToChat(prompt);
+  const handleSendToChat = useCallback((e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    
+    console.log('Send to chat triggered with text:', selectedText); // Debug log
+    
+    if (!selectedText.trim() || !onSendToChat) {
+      console.log('No selected text or onSendToChat handler'); // Debug log
+      return;
+    }
+
+    try {
+      // Create a comprehensive prompt with both selected text and full context
+      const contextPrompt = `I'd like you to analyze this specific part of my transcription: "${selectedText}"
+
+For context, here is the full transcription:
+"""
+${fullTranscription}
+"""
+
+Please focus your analysis on the selected portion: "${selectedText}"`;
+
+      console.log('Sending to chat with context'); // Debug log
+      onSendToChat(contextPrompt);
       
       // Clear selection and hide popup
-      window.getSelection()?.removeAllRanges();
-      setPopupPosition(prev => ({ ...prev, visible: false }));
-      setSelectedText('');
+      setTimeout(() => {
+        window.getSelection()?.removeAllRanges();
+        setPopupPosition(prev => ({ ...prev, visible: false }));
+        setSelectedText('');
+      }, 100);
+      
+    } catch (error) {
+      console.error('Error sending to chat:', error);
     }
-  }, [selectedText, onSendToChat]);
+  }, [selectedText, onSendToChat, fullTranscription]);
 
   const handleClickOutside = useCallback((event: MouseEvent) => {
-    if (
-      popupRef.current && 
-      !popupRef.current.contains(event.target as Node) &&
-      transcriptionRef.current &&
-      !transcriptionRef.current.contains(event.target as Node)
-    ) {
-      setPopupPosition(prev => ({ ...prev, visible: false }));
-      setSelectedText('');
-      window.getSelection()?.removeAllRanges();
+    const target = event.target as Node;
+    
+    // Don't close if clicking on the popup itself
+    if (popupRef.current && popupRef.current.contains(target)) {
+      return;
     }
+    
+    // Don't close if clicking within transcription area (allow text selection)
+    if (transcriptionRef.current && transcriptionRef.current.contains(target)) {
+      return;
+    }
+    
+    // Close popup if clicking outside
+    console.log('Click outside detected, hiding popup'); // Debug log
+    setPopupPosition(prev => ({ ...prev, visible: false }));
+    setSelectedText('');
+    window.getSelection()?.removeAllRanges();
   }, []);
 
   useEffect(() => {
+    // Use mouseup for better text selection detection
     document.addEventListener('mouseup', handleTextSelection);
     document.addEventListener('mousedown', handleClickOutside);
     
@@ -166,7 +215,7 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
           <ScrollArea className="h-64 max-h-[400px] relative" ref={scrollAreaRef}>
             <div 
               ref={transcriptionRef}
-              className="text-slate-300 text-sm leading-relaxed select-text cursor-text relative pr-4"
+              className="text-slate-300 text-sm leading-relaxed select-text cursor-text relative pr-4 min-h-[200px]"
               style={{ userSelect: 'text' }}
             >
               {fullTranscription || (
@@ -187,21 +236,22 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
                     top: `${popupPosition.top}px`,
                     left: `${popupPosition.left}px`,
                   }}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-lg p-2">
+                  <div className="bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-3">
                     <Button
                       size="sm"
                       onClick={handleSendToChat}
-                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs gap-1 h-8"
+                      className="bg-blue-600 hover:bg-blue-700 text-white text-xs gap-1 h-8 min-w-[100px]"
                     >
                       <Send className="w-3 h-3" />
                       Send to AI
                     </Button>
-                    <div className="text-xs text-slate-400 mt-1 max-w-32 truncate">
-                      "{selectedText.length > 20 ? selectedText.substring(0, 20) + '...' : selectedText}"
+                    <div className="text-xs text-slate-400 mt-2 max-w-40 truncate">
+                      "{selectedText.length > 25 ? selectedText.substring(0, 25) + '...' : selectedText}"
                     </div>
                   </div>
-                  {/* Arrow pointing down to selected text */}
+                  {/* Arrow pointing to selected text */}
                   <div className="absolute top-full left-1/2 transform -translate-x-1/2">
                     <div className="w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-600"></div>
                   </div>
