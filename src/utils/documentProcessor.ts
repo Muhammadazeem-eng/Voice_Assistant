@@ -2,19 +2,14 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import mammoth from 'mammoth';
 
-// Simple PDF.js worker setup with local fallback
+// Configure PDF.js worker with multiple fallback options
 if (typeof window !== 'undefined') {
   try {
-    // Use the built-in worker from the package
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.js',
-      import.meta.url
-    ).toString();
-    console.log('PDF.js worker configured successfully');
+    // Try to use the bundled worker first
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
+    console.log('PDF.js worker configured with CDN');
   } catch (error) {
-    console.warn('PDF.js worker setup warning:', error);
-    // Fallback to CDN worker
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    console.warn('PDF.js worker setup error:', error);
   }
 }
 
@@ -40,11 +35,11 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 
   try {
     if (fileType === 'application/pdf') {
-      const result = await extractPDFTextSimplified(file);
+      const result = await extractPDFText(file);
       content = result.content;
       processingDetails = result.details;
     } else if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const result = await extractDOCXTextEnhanced(file);
+      const result = await extractDOCXText(file);
       content = result.content;
       processingDetails = result.details;
     } else {
@@ -55,7 +50,7 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
       throw new Error('No readable text content could be extracted from the document. The file may be image-based, corrupted, or password-protected.');
     }
 
-    const wordCount = content.split(/\s+/).length;
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
     console.log(`Document processed successfully: ${wordCount} words extracted`);
 
     return {
@@ -74,95 +69,116 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
   }
 };
 
-const extractPDFTextSimplified = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting simplified PDF extraction for:', file.name);
+const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
+  console.log('Starting PDF extraction for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Simplified PDF loading with minimal configuration
+    // Load PDF with minimal configuration
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
-      verbosity: 0,
-      standardFontDataUrl: undefined, // Disable font loading
-      cMapUrl: undefined, // Disable cMap loading
-      useSystemFonts: false
+      verbosity: 0
     }).promise;
 
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
-    let fullText = '';
-    let successfulPages = 0;
+    let allText = '';
+    let processedPages = 0;
+    let totalTextLength = 0;
 
+    // Process each page
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
       try {
         console.log(`Processing PDF page ${pageNum}/${pdf.numPages}`);
         const page = await pdf.getPage(pageNum);
         
-        // Get text content with basic options
+        // Extract text content
         const textContent = await page.getTextContent();
         
+        // Process text items more permissively
+        let pageText = '';
         if (textContent.items && textContent.items.length > 0) {
-          const pageText = textContent.items
-            .filter((item): item is any => 'str' in item && item.str && item.str.trim().length > 0)
-            .map((item) => item.str)
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-          
-          if (pageText.length > 0) {
-            fullText += pageText + '\n\n';
-            successfulPages++;
-            console.log(`Page ${pageNum} extracted: ${pageText.length} characters`);
-          }
+          pageText = textContent.items
+            .map((item: any) => {
+              // Handle different item types
+              if (item.str !== undefined) {
+                return item.str;
+              }
+              return '';
+            })
+            .filter(text => text && text.trim().length > 0)
+            .join(' ');
         }
+        
+        // Clean up the page text
+        pageText = pageText
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        if (pageText.length > 0) {
+          allText += pageText + '\n\n';
+          totalTextLength += pageText.length;
+          processedPages++;
+          console.log(`Page ${pageNum}: extracted ${pageText.length} characters`);
+        } else {
+          console.log(`Page ${pageNum}: no text found`);
+        }
+        
       } catch (pageError) {
         console.warn(`Error processing PDF page ${pageNum}:`, pageError.message);
-        // Continue with other pages
+        // Continue with other pages instead of failing
+        continue;
       }
     }
 
-    if (successfulPages === 0) {
-      throw new Error(`No readable text found in PDF. This may be an image-based PDF. Processed ${successfulPages}/${pdf.numPages} pages.`);
+    console.log(`PDF processing summary: ${processedPages}/${pdf.numPages} pages processed, ${totalTextLength} total characters`);
+
+    // Be more lenient with text validation
+    if (totalTextLength === 0) {
+      throw new Error(`No text content found in any pages. This appears to be an image-based PDF that requires OCR processing.`);
     }
 
-    if (fullText.trim().length < 10) {
-      throw new Error(`Very little text extracted (${fullText.length} characters). This PDF may contain mostly images.`);
+    // Accept even small amounts of text (some PDFs have sparse text)
+    if (totalTextLength < 5) {
+      console.warn(`Very little text extracted (${totalTextLength} characters), but proceeding anyway`);
     }
-
-    console.log(`PDF extraction completed: ${fullText.length} characters from ${successfulPages}/${pdf.numPages} pages`);
 
     return {
-      content: fullText.trim(),
+      content: allText.trim(),
       details: {
-        extractionMethod: 'PDF.js simplified',
+        extractionMethod: 'PDF.js text extraction',
         pageCount: pdf.numPages,
-        successfulPages
+        processedPages,
+        totalTextLength
       }
     };
+    
   } catch (error) {
     console.error('PDF extraction failed:', error);
     
-    // Provide specific error messages
+    // Provide more specific error messages
     if (error.message.includes('Invalid PDF')) {
-      throw new Error('Invalid PDF file format. Please ensure the file is a valid PDF document.');
-    } else if (error.message.includes('Password')) {
-      throw new Error('Password-protected PDF detected. Please provide an unprotected PDF file.');
+      throw new Error('This file does not appear to be a valid PDF document.');
+    } else if (error.message.includes('password') || error.message.includes('encrypted')) {
+      throw new Error('This PDF is password-protected. Please provide an unprotected PDF file.');
+    } else if (error.message.includes('image-based')) {
+      throw error; // Re-throw our custom message
     } else {
-      throw new Error(`PDF text extraction failed: ${error.message}. This may be an image-based PDF or contain complex formatting.`);
+      throw new Error(`PDF processing failed: ${error.message}`);
     }
   }
 };
 
-const extractDOCXTextEnhanced = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting enhanced DOCX extraction for:', file.name);
+const extractDOCXText = async (file: File): Promise<{content: string, details: any}> => {
+  console.log('Starting DOCX extraction for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('DOCX arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Use mammoth to extract raw text
+    // Use mammoth to extract text
     const result = await mammoth.extractRawText({ arrayBuffer });
     
     console.log('DOCX extraction result:', {
@@ -176,13 +192,13 @@ const extractDOCXTextEnhanced = async (file: File): Promise<{content: string, de
     }
     
     if (!result.value || result.value.trim().length === 0) {
-      throw new Error('No readable text content found in DOCX file. The document may be empty, corrupted, or contain only images.');
+      throw new Error('No readable text content found in DOCX file. The document may be empty or contain only images.');
     }
     
     // Clean up the extracted text
     const cleanedText = result.value
       .replace(/\r\n/g, '\n')
-      .replace(/\n\s*\n\s*\n/g, '\n\n') // Remove excessive line breaks
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
       .trim();
     
     console.log(`DOCX extraction completed: ${cleanedText.length} characters`);
@@ -190,19 +206,19 @@ const extractDOCXTextEnhanced = async (file: File): Promise<{content: string, de
     return {
       content: cleanedText,
       details: {
-        extractionMethod: 'Mammoth enhanced',
+        extractionMethod: 'Mammoth text extraction',
         hasImages: result.messages?.some(msg => msg.message.includes('image')) || false
       }
     };
   } catch (error) {
-    console.error('Enhanced DOCX extraction failed:', error);
+    console.error('DOCX extraction failed:', error);
     
     if (error.message.includes('not a valid zip file')) {
-      throw new Error('Invalid DOCX file format. Please ensure the file is a valid Word document.');
+      throw new Error('This file does not appear to be a valid Word document.');
     } else if (error.message.includes('encrypted')) {
-      throw new Error('Password-protected DOCX detected. Please provide an unprotected document.');
+      throw new Error('This Word document is password-protected. Please provide an unprotected document.');
     } else {
-      throw new Error(`DOCX text extraction failed: ${error.message}`);
+      throw new Error(`DOCX processing failed: ${error.message}`);
     }
   }
 };
@@ -224,19 +240,19 @@ export const chunkText = (text: string, chunkSize: number = 800, overlap: number
       const lastExclamationEnd = chunk.lastIndexOf('! ');
       
       const sentenceEnd = Math.max(lastSentenceEnd, lastQuestionEnd, lastExclamationEnd);
-      if (sentenceEnd > chunk.length * 0.6) { // Only break if we're not cutting too much
+      if (sentenceEnd > chunk.length * 0.6) {
         chunk = text.slice(start, start + sentenceEnd + 2);
       }
     }
     
     const trimmedChunk = chunk.trim();
-    if (trimmedChunk.length > 20) { // Only add meaningful chunks
+    if (trimmedChunk.length > 10) { // Reduced minimum chunk size
       chunks.push(trimmedChunk);
       console.log(`Chunk ${chunks.length}: ${trimmedChunk.length} characters`);
     }
     
     if (end === text.length) break;
-    start = Math.max(start + chunk.length - overlap, start + 1); // Ensure progress
+    start = Math.max(start + chunk.length - overlap, start + 1);
   }
 
   console.log(`Text chunking completed: ${chunks.length} chunks created`);
