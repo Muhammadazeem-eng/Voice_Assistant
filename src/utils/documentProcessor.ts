@@ -68,12 +68,10 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Load PDF with proper configuration
+    // Load PDF with minimal configuration to avoid API errors
     const pdf = await pdfjsLib.getDocument({
       data: arrayBuffer,
-      verbosity: 0,
-      // Add error recovery options
-      stopAtErrors: false
+      verbosity: 0
     }).promise;
     
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
@@ -145,8 +143,6 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
       throw new Error('PDF is password-protected. Please provide an unprotected file.');
     } else if (error.message.includes('image-based')) {
       throw error; // Re-throw our custom message
-    } else if (error.message.includes('API version')) {
-      throw new Error('PDF processing library error. Please try again or use a different PDF file.');
     } else {
       throw new Error(`PDF processing failed: ${error.message}`);
     }
