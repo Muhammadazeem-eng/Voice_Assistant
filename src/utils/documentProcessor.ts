@@ -1,5 +1,8 @@
+
 import mammoth from 'mammoth';
-import { pdfjs, getDocument } from 'react-pdf';
+import { pdfjs } from 'react-pdf';
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+import 'react-pdf/dist/esm/Page/TextLayer.css';
 
 // Configure react-pdf worker with proper version matching
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
@@ -62,14 +65,14 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 };
 
 const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting PDF text extraction with react-pdf for:', file.name);
+  console.log('Starting PDF text extraction with pdfjs-dist for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
     console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
     
-    // Load PDF with react-pdf
-    const pdf = await getDocument({ data: arrayBuffer }).promise;
+    // Use pdfjs directly through the react-pdf's pdfjs export
+    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
     
     console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
     
