@@ -150,14 +150,14 @@ ${fullTranscription}
 Please focus your analysis on the selected portion: "${selectedText}"`;
 
       console.log('Sending to chat with context');
-      onSendToChat(contextPrompt);
       
-      // Clear selection and hide popup
-      setTimeout(() => {
-        window.getSelection()?.removeAllRanges();
-        setPopupPosition(prev => ({ ...prev, visible: false }));
-        setSelectedText('');
-      }, 100);
+      // Immediately clear selection and hide popup to prevent interference
+      window.getSelection()?.removeAllRanges();
+      setPopupPosition(prev => ({ ...prev, visible: false }));
+      setSelectedText('');
+      
+      // Send to chat after cleanup
+      onSendToChat(contextPrompt);
       
     } catch (error) {
       console.error('Error sending to chat:', error);
@@ -231,7 +231,7 @@ Please focus your analysis on the selected portion: "${selectedText}"`;
             </ScrollArea>
 
             {/* Floating Send to AI Popup - positioned relative to ScrollArea */}
-            {popupPosition.visible && onSendToChat && selectedText.trim() && (
+            {popupPosition.visible && onSendToChat && selectedText.trim() && !isRecording && (
               <div
                 ref={popupRef}
                 className="absolute z-50 animate-in fade-in-0 scale-in-95 duration-200 pointer-events-auto"

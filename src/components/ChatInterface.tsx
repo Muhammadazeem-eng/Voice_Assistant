@@ -49,14 +49,6 @@ const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
   // Use RAG messages if available and documents exist, otherwise use external messages
   const displayMessages = documents.length > 0 ? ragMessages : externalMessages;
 
-  // Expose sendMessage method to parent component
-  useImperativeHandle(ref, () => ({
-    sendMessage: (message: string) => {
-      setInputText(message);
-      setTimeout(() => handleSendMessage(message), 100);
-    }
-  }), []);
-
   useEffect(() => {
     // Auto-scroll to bottom when new messages arrive
     if (scrollAreaRef.current) {
@@ -144,6 +136,14 @@ const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
       }
     }
   };
+
+  // Expose sendMessage method to parent component
+  useImperativeHandle(ref, () => ({
+    sendMessage: (message: string) => {
+      // Directly send the message without setting input text
+      handleSendMessage(message);
+    }
+  }), [handleSendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
