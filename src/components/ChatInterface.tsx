@@ -209,10 +209,10 @@ const ChatInterface = forwardRef<ChatInterfaceRef, ChatInterfaceProps>(({
                     <div className="mt-2 pt-2 border-t border-slate-600">
                       <p className="text-xs text-slate-400 mb-1">Sources:</p>
                       <div className="flex flex-wrap gap-1">
-                        {message.documentContext.map((doc, index) => (
+                        {Array.from(new Set(message.documentContext.map(doc => doc.filename))).map((filename, index) => (
                           <Badge key={index} variant="outline" className="text-xs">
                             <File className="w-3 h-3 mr-1" />
-                            {doc.filename}
+                            {filename}
                           </Badge>
                         ))}
                       </div>
