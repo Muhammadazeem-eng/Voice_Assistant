@@ -231,7 +231,7 @@ Please focus your analysis on the selected portion: "${selectedText}"`;
             </ScrollArea>
 
             {/* Floating Send to AI Popup - positioned relative to ScrollArea */}
-            {popupPosition.visible && onSendToChat && selectedText.trim() && !isRecording && (
+            {popupPosition.visible && onSendToChat && selectedText.trim() && (
               <div
                 ref={popupRef}
                 className="absolute z-50 animate-in fade-in-0 scale-in-95 duration-200 pointer-events-auto"
