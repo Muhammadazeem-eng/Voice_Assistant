@@ -1,15 +1,18 @@
-
 import mammoth from 'mammoth';
 import { pdfjs } from 'react-pdf';
 
 // Configure react-pdf worker with a more reliable approach
-// Use a simpler worker configuration that works across different environments
+// Use a local worker configuration that works across different environments
 try {
-  pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+  // Use a more reliable worker configuration
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.js',
+    import.meta.url,
+  ).toString();
 } catch (error) {
   console.warn('Failed to set PDF worker source:', error);
-  // Fallback to local worker if available
-  pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+  // Fallback to CDN worker if local import fails
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 }
 
 // PDF.co API configuration
@@ -127,8 +130,8 @@ const extractPDFTextWithPDFCo = async (file: File): Promise<{content: string, de
     }
 
     if (!extractData.body || extractData.body.trim().length === 0) {
-      console.log('PDF.co extraction returned empty text, falling back to react-pdf...');
-      return await extractPDFTextFallback(file);
+      console.log('PDF.co extraction returned empty text, trying alternative approach...');
+      throw new Error('PDF.co extraction returned empty content');
     }
 
     // Clean up the extracted text
@@ -149,92 +152,8 @@ const extractPDFTextWithPDFCo = async (file: File): Promise<{content: string, de
     };
 
   } catch (error) {
-    console.error('PDF.co extraction failed, falling back to react-pdf:', error);
-    return await extractPDFTextFallback(file);
-  }
-};
-
-const extractPDFTextFallback = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting fallback PDF text extraction with react-pdf for:', file.name);
-  
-  try {
-    const arrayBuffer = await file.arrayBuffer();
-    console.log('PDF arrayBuffer size:', arrayBuffer.byteLength);
-    
-    // Simplified PDF.js initialization
-    const pdf = await pdfjs.getDocument({ 
-      data: arrayBuffer,
-      useSystemFonts: true,
-    }).promise;
-    
-    console.log(`PDF loaded successfully. Pages: ${pdf.numPages}`);
-    
-    let fullText = '';
-    let successfulPages = 0;
-    
-    // Extract text from each page with better error handling
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      try {
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        
-        // Extract text from page
-        const pageText = textContent.items
-          .filter((item: any) => item.str && typeof item.str === 'string')
-          .map((item: any) => item.str.trim())
-          .filter((text: string) => text.length > 0)
-          .join(' ');
-        
-        if (pageText.trim().length > 0) {
-          fullText += pageText + '\n\n';
-          successfulPages++;
-        }
-        
-        console.log(`Page ${pageNum}: ${pageText.length} characters extracted`);
-      } catch (pageError) {
-        console.warn(`Error processing page ${pageNum}:`, pageError);
-        // Continue with other pages instead of failing
-      }
-    }
-    
-    console.log(`Successfully processed ${successfulPages}/${pdf.numPages} pages`);
-    
-    // Clean up the extracted text
-    const cleanedText = fullText
-      .replace(/\s{3,}/g, ' ')  // Replace multiple spaces with single space
-      .replace(/\n\s*\n\s*\n/g, '\n\n')  // Normalize paragraph breaks
-      .trim();
-    
-    console.log(`Fallback PDF text extraction completed: ${cleanedText.length} characters total`);
-    
-    // Validation - accept documents with minimal text
-    if (!cleanedText || cleanedText.length < 10) {
-      throw new Error('No readable text content found in PDF. This document may be image-based or corrupted.');
-    }
-    
-    return {
-      content: cleanedText,
-      details: {
-        extractionMethod: 'react-pdf fallback extraction',
-        pageCount: pdf.numPages,
-        successfulPages,
-        totalTextLength: cleanedText.length
-      }
-    };
-    
-  } catch (error) {
-    console.error('Fallback PDF extraction failed:', error);
-    
-    // Provide specific error messages
-    if (error.message.includes('Invalid PDF') || error.message.includes('corrupted')) {
-      throw new Error('Invalid PDF file. Please ensure the file is not corrupted.');
-    } else if (error.message.includes('password') || error.message.includes('encrypted')) {
-      throw new Error('PDF is password-protected. Please provide an unprotected file.');
-    } else if (error.message.includes('image-based')) {
-      throw error; // Re-throw our custom message
-    } else {
-      throw new Error(`PDF processing failed: ${error.message}`);
-    }
+    console.error('PDF.co extraction failed:', error);
+    throw new Error(`PDF processing failed: ${error.message}. Please try a different PDF file or contact support.`);
   }
 };
 
