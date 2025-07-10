@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -139,30 +138,20 @@ const TranscriptionDisplay: React.FC<TranscriptionDisplayProps> = ({
     }
 
     try {
-      // Create a comprehensive prompt with both selected text and full context
-      const contextPrompt = `I'd like you to analyze this specific part of my transcription: "${selectedText}"
-
-For context, here is the full transcription:
-"""
-${fullTranscription}
-"""
-
-Please focus your analysis on the selected portion: "${selectedText}"`;
-
-      console.log('Sending to chat with context');
+      console.log('Sending selected text directly to chat');
       
       // Immediately clear selection and hide popup to prevent interference
       window.getSelection()?.removeAllRanges();
       setPopupPosition(prev => ({ ...prev, visible: false }));
       setSelectedText('');
       
-      // Send to chat after cleanup
-      onSendToChat(contextPrompt);
+      // Send only the selected text directly to chat
+      onSendToChat(selectedText);
       
     } catch (error) {
       console.error('Error sending to chat:', error);
     }
-  }, [selectedText, onSendToChat, fullTranscription]);
+  }, [selectedText, onSendToChat]);
 
   const handleClickOutside = useCallback((event: MouseEvent) => {
     const target = event.target as Node;
