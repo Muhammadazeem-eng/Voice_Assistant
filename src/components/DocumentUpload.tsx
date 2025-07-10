@@ -75,9 +75,13 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       });
       console.log('API Key configured:', apiKey ? 'Yes' : 'No');
       
-      // Step 1: Process document with better error handling
+      // Step 1: Process document with better error handling and consistent progress updates
       setUploadProgress(15);
-      setProcessingStatus('Extracting text from document...');
+      if (file.type === 'application/pdf') {
+        setProcessingStatus('Extracting text from PDF...');
+      } else {
+        setProcessingStatus('Extracting text from document...');
+      }
       
       let processedDoc;
       try {
@@ -219,7 +223,7 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
                 headers: {
                   'Authorization': `Bearer ${apiKey}`,
                   'Content-Type': 'application/json'
-                },
+                  },
                 body: JSON.stringify({
                   model: 'text-embedding-3-small',
                   input: chunk,
