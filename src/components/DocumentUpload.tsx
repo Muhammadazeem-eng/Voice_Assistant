@@ -353,11 +353,11 @@ const DocumentUpload: React.FC<DocumentUploadProps> = ({
       <div className="flex items-center justify-between">
         <h4 className="font-medium text-slate-200">Documents</h4>
         <Button
-          variant="outline"
+          variant="secondary"
           size="sm"
           onClick={() => fileInputRef.current?.click()}
           disabled={isProcessing}
-          className="border-slate-600 text-slate-300 hover:bg-slate-800"
+          className="bg-slate-700 border-slate-600 text-slate-200 hover:bg-slate-600 hover:text-slate-100"
         >
           <Plus className="w-4 h-4 mr-1" />
           Add Document
