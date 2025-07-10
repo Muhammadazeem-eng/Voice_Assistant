@@ -1,3 +1,4 @@
+
 import mammoth from 'mammoth';
 import { pdfjs } from 'react-pdf';
 
@@ -10,6 +11,10 @@ try {
   // Fallback to local worker if available
   pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 }
+
+// PDF.co API configuration
+const PDFCO_API_KEY = 'muhammad.azm556@gmail.com_rqoOK38F3gw4cb6zanXLtzTsBso1CTzLK9CCffCnDKPQOHprXjW1EkKfS6oQbCSq';
+const PDFCO_BASE_URL = 'https://api.pdf.co/v1';
 
 export interface ProcessedDocument {
   content: string;
@@ -33,7 +38,7 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
 
   try {
     if (fileType === 'application/pdf') {
-      const result = await extractPDFText(file);
+      const result = await extractPDFTextWithPDFCo(file);
       content = result.content;
       processingDetails = result.details;
     } else if (fileType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -68,8 +73,89 @@ export const processDocument = async (file: File): Promise<ProcessedDocument> =>
   }
 };
 
-const extractPDFText = async (file: File): Promise<{content: string, details: any}> => {
-  console.log('Starting PDF text extraction with react-pdf for:', file.name);
+const extractPDFTextWithPDFCo = async (file: File): Promise<{content: string, details: any}> => {
+  console.log('Starting PDF text extraction with PDF.co for:', file.name);
+  
+  try {
+    // Step 1: Upload file to PDF.co
+    const uploadFormData = new FormData();
+    uploadFormData.append('file', file);
+    
+    console.log('Uploading PDF to PDF.co...');
+    const uploadResponse = await fetch(`${PDFCO_BASE_URL}/file/upload`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': PDFCO_API_KEY
+      },
+      body: uploadFormData
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error(`PDF.co upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+    }
+
+    const uploadData = await uploadResponse.json();
+    console.log('PDF uploaded to PDF.co successfully:', uploadData.url);
+
+    // Step 2: Extract text using PDF.co
+    const extractResponse = await fetch(`${PDFCO_BASE_URL}/pdf/convert/to/text`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': PDFCO_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        url: uploadData.url,
+        pages: '',  // Extract all pages
+        password: '' // No password
+      })
+    });
+
+    if (!extractResponse.ok) {
+      throw new Error(`PDF.co text extraction failed: ${extractResponse.status} ${extractResponse.statusText}`);
+    }
+
+    const extractData = await extractResponse.json();
+    console.log('PDF.co extraction response:', {
+      success: extractData.error === false,
+      hasText: !!extractData.body,
+      textLength: extractData.body?.length || 0
+    });
+
+    if (extractData.error) {
+      throw new Error(`PDF.co extraction error: ${extractData.message}`);
+    }
+
+    if (!extractData.body || extractData.body.trim().length === 0) {
+      console.log('PDF.co extraction returned empty text, falling back to react-pdf...');
+      return await extractPDFTextFallback(file);
+    }
+
+    // Clean up the extracted text
+    const cleanedText = extractData.body
+      .replace(/\r\n/g, '\n')
+      .replace(/\s{3,}/g, ' ')  // Replace multiple spaces with single space
+      .replace(/\n\s*\n\s*\n/g, '\n\n')  // Normalize paragraph breaks
+      .trim();
+
+    console.log(`PDF.co text extraction completed: ${cleanedText.length} characters total`);
+
+    return {
+      content: cleanedText,
+      details: {
+        extractionMethod: 'PDF.co API',
+        totalTextLength: cleanedText.length
+      }
+    };
+
+  } catch (error) {
+    console.error('PDF.co extraction failed, falling back to react-pdf:', error);
+    return await extractPDFTextFallback(file);
+  }
+};
+
+const extractPDFTextFallback = async (file: File): Promise<{content: string, details: any}> => {
+  console.log('Starting fallback PDF text extraction with react-pdf for:', file.name);
   
   try {
     const arrayBuffer = await file.arrayBuffer();
@@ -119,7 +205,7 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
       .replace(/\n\s*\n\s*\n/g, '\n\n')  // Normalize paragraph breaks
       .trim();
     
-    console.log(`PDF text extraction completed: ${cleanedText.length} characters total`);
+    console.log(`Fallback PDF text extraction completed: ${cleanedText.length} characters total`);
     
     // Validation - accept documents with minimal text
     if (!cleanedText || cleanedText.length < 10) {
@@ -129,7 +215,7 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     return {
       content: cleanedText,
       details: {
-        extractionMethod: 'react-pdf text extraction',
+        extractionMethod: 'react-pdf fallback extraction',
         pageCount: pdf.numPages,
         successfulPages,
         totalTextLength: cleanedText.length
@@ -137,7 +223,7 @@ const extractPDFText = async (file: File): Promise<{content: string, details: an
     };
     
   } catch (error) {
-    console.error('PDF extraction failed:', error);
+    console.error('Fallback PDF extraction failed:', error);
     
     // Provide specific error messages
     if (error.message.includes('Invalid PDF') || error.message.includes('corrupted')) {
