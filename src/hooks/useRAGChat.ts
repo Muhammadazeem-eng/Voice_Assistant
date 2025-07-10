@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
@@ -251,16 +250,32 @@ INSTRUCTIONS:
       const data = await response.json();
       const assistantContent = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
       
+      // Remove duplicate document sources by grouping by filename and keeping only unique ones
+      const uniqueDocumentSources = relevantChunks.length > 0 
+        ? relevantChunks.reduce((acc, chunk) => {
+            const existingIndex = acc.findIndex(item => item.filename === chunk.filename);
+            if (existingIndex === -1) {
+              acc.push(chunk);
+            } else {
+              // Keep the one with higher similarity if there are duplicates
+              if (chunk.similarity > acc[existingIndex].similarity) {
+                acc[existingIndex] = chunk;
+              }
+            }
+            return acc;
+          }, [] as typeof relevantChunks)
+        : undefined;
+      
       const assistantMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: assistantContent,
         timestamp: new Date(),
-        documentContext: relevantChunks.length > 0 ? relevantChunks : undefined
+        documentContext: uniqueDocumentSources
       };
 
       setMessages(prev => [...prev, assistantMessage]);
-      console.log('Assistant response generated successfully');
+      console.log('Assistant response generated successfully with unique sources:', uniqueDocumentSources?.length || 0);
 
       // Store messages in database
       try {
@@ -275,7 +290,7 @@ INSTRUCTIONS:
             session_id: currentSessionId,
             role: 'assistant',
             content: assistantContent,
-            document_context: relevantChunks.length > 0 ? relevantChunks : null
+            document_context: uniqueDocumentSources || null
           }
         ]);
         console.log('Messages stored in database');
