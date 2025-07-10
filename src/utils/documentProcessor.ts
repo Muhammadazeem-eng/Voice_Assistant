@@ -2,16 +2,13 @@ import mammoth from 'mammoth';
 import { pdfjs } from 'react-pdf';
 
 // Configure react-pdf worker with a more reliable approach
-// Use a local worker configuration that works across different environments
 try {
-  // Use a more reliable worker configuration
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     'pdfjs-dist/build/pdf.worker.min.js',
     import.meta.url,
   ).toString();
 } catch (error) {
   console.warn('Failed to set PDF worker source:', error);
-  // Fallback to CDN worker if local import fails
   pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 }
 
@@ -93,49 +90,84 @@ const extractPDFTextWithPDFCo = async (file: File): Promise<{content: string, de
       body: uploadFormData
     });
 
+    console.log('Upload response status:', uploadResponse.status);
+    console.log('Upload response headers:', Object.fromEntries(uploadResponse.headers.entries()));
+
     if (!uploadResponse.ok) {
-      throw new Error(`PDF.co upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+      const errorText = await uploadResponse.text();
+      console.error('PDF.co upload error response:', errorText);
+      throw new Error(`PDF.co upload failed: ${uploadResponse.status} - ${errorText}`);
     }
 
     const uploadData = await uploadResponse.json();
-    console.log('PDF uploaded to PDF.co successfully:', uploadData.url);
+    console.log('PDF uploaded to PDF.co successfully:', uploadData);
+
+    if (!uploadData.url) {
+      throw new Error('PDF.co upload did not return a valid URL');
+    }
 
     // Step 2: Extract text using PDF.co
+    const extractPayload = {
+      url: uploadData.url,
+      pages: '',  // Extract all pages
+      password: '', // No password
+      async: false
+    };
+
+    console.log('Extracting text with payload:', extractPayload);
+
     const extractResponse = await fetch(`${PDFCO_BASE_URL}/pdf/convert/to/text`, {
       method: 'POST',
       headers: {
         'x-api-key': PDFCO_API_KEY,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
       },
-      body: JSON.stringify({
-        url: uploadData.url,
-        pages: '',  // Extract all pages
-        password: '' // No password
-      })
+      body: JSON.stringify(extractPayload)
     });
 
+    console.log('Extract response status:', extractResponse.status);
+    console.log('Extract response headers:', Object.fromEntries(extractResponse.headers.entries()));
+
     if (!extractResponse.ok) {
-      throw new Error(`PDF.co text extraction failed: ${extractResponse.status} ${extractResponse.statusText}`);
+      const errorText = await extractResponse.text();
+      console.error('PDF.co extraction error response:', errorText);
+      throw new Error(`PDF.co text extraction failed: ${extractResponse.status} - ${errorText}`);
     }
 
     const extractData = await extractResponse.json();
     console.log('PDF.co extraction response:', {
-      success: extractData.error === false,
-      hasText: !!extractData.body,
-      textLength: extractData.body?.length || 0
+      error: extractData.error,
+      hasBody: !!extractData.body,
+      bodyLength: extractData.body?.length || 0,
+      message: extractData.message,
+      url: extractData.url
     });
 
-    if (extractData.error) {
-      throw new Error(`PDF.co extraction error: ${extractData.message}`);
+    if (extractData.error === true) {
+      throw new Error(`PDF.co extraction error: ${extractData.message || 'Unknown error'}`);
     }
 
-    if (!extractData.body || extractData.body.trim().length === 0) {
-      console.log('PDF.co extraction returned empty text, trying alternative approach...');
-      throw new Error('PDF.co extraction returned empty content');
+    // Check if we have text content
+    let textContent = '';
+    if (extractData.body && typeof extractData.body === 'string') {
+      textContent = extractData.body;
+    } else if (extractData.url) {
+      // If PDF.co returns a URL to the text file, fetch it
+      console.log('Fetching text content from URL:', extractData.url);
+      const textResponse = await fetch(extractData.url);
+      if (textResponse.ok) {
+        textContent = await textResponse.text();
+      }
+    }
+
+    if (!textContent || textContent.trim().length === 0) {
+      console.log('PDF.co extraction returned empty text. Response:', extractData);
+      throw new Error('PDF appears to contain no readable text content. It may be image-based or corrupted.');
     }
 
     // Clean up the extracted text
-    const cleanedText = extractData.body
+    const cleanedText = textContent
       .replace(/\r\n/g, '\n')
       .replace(/\s{3,}/g, ' ')  // Replace multiple spaces with single space
       .replace(/\n\s*\n\s*\n/g, '\n\n')  // Normalize paragraph breaks
@@ -153,7 +185,7 @@ const extractPDFTextWithPDFCo = async (file: File): Promise<{content: string, de
 
   } catch (error) {
     console.error('PDF.co extraction failed:', error);
-    throw new Error(`PDF processing failed: ${error.message}. Please try a different PDF file or contact support.`);
+    throw new Error(`PDF processing failed: ${error.message}. Please ensure the PDF contains readable text and try again.`);
   }
 };
 
