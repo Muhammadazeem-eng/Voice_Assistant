@@ -121,20 +121,20 @@ const Index = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-slate-950 text-slate-50">
       {/* Header */}
-      <div className="border-b border-border bg-card/50 backdrop-blur-sm shadow-elegant">
+      <div className="border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-foreground bg-gradient-primary bg-clip-text text-transparent">AI Meeting Assistant</h1>
-              <p className="text-muted-foreground">Real-time transcription with AI chat support</p>
+              <h1 className="text-2xl font-bold text-slate-50">AI Meeting Assistant</h1>
+              <p className="text-slate-400">Real-time transcription with AI chat support</p>
             </div>
             <div className="flex items-center gap-4">
               {isRecording && (
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                  <span className="text-sm font-mono text-muted-foreground">
+                  <span className="text-sm font-mono text-slate-300">
                     {formatTime(recordingTime)}
                   </span>
                   <Badge variant="destructive" className="text-xs">
@@ -154,9 +154,9 @@ const Index = () => {
         />
 
         {/* Audio Controls */}
-        <Card className="bg-card/50 border-border mb-6 shadow-elegant">
+        <Card className="bg-slate-900/50 border-slate-700 mb-6">
           <div className="p-6">
-            <h3 className="text-lg font-semibold mb-4 text-foreground">Audio Input</h3>
+            <h3 className="text-lg font-semibold mb-4 text-slate-50">Audio Input</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <AudioRecorder
                 isRecording={isRecording && recordingMode === 'microphone'}
@@ -200,14 +200,14 @@ const Index = () => {
             {isRecording && (
               <div className="mt-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-sm text-muted-foreground">Audio Level:</span>
-                  <div className="flex-1 bg-muted rounded-full h-2">
+                  <span className="text-sm text-slate-400">Audio Level:</span>
+                  <div className="flex-1 bg-slate-800 rounded-full h-2">
                     <div 
-                      className="bg-gradient-to-r from-primary to-accent h-2 rounded-full transition-all duration-100"
+                      className="bg-gradient-to-r from-green-500 to-yellow-500 h-2 rounded-full transition-all duration-100"
                       style={{ width: `${audioLevel}%` }}
                     />
                   </div>
-                  <span className="text-xs text-muted-foreground w-10">{Math.round(audioLevel)}%</span>
+                  <span className="text-xs text-slate-400 w-10">{Math.round(audioLevel)}%</span>
                 </div>
               </div>
             )}
@@ -219,14 +219,14 @@ const Index = () => {
           {/* Transcription Column */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-xl font-semibold text-foreground">Transcription</h2>
+              <h2 className="text-xl font-semibold text-slate-50">Transcription</h2>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={copyTranscription}
                   disabled={!fullTranscription}
-                  className="border-border bg-secondary/20 text-secondary-foreground hover:bg-secondary/40 hover:text-secondary-foreground transition-all"
+                  className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Copy className="w-4 h-4 mr-2" />
                   Copy
@@ -236,7 +236,7 @@ const Index = () => {
                   size="sm"
                   onClick={clearTranscription}
                   disabled={!fullTranscription}
-                  className="border-border bg-secondary/20 text-secondary-foreground hover:bg-secondary/40 hover:text-secondary-foreground transition-all"
+                  className="border-slate-600 text-slate-300 hover:bg-slate-800"
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
                   Clear
@@ -253,7 +253,7 @@ const Index = () => {
 
           {/* Chat Column */}
           <div className="space-y-4">
-            <h2 className="text-xl font-semibold text-foreground">AI Assistant</h2>
+            <h2 className="text-xl font-semibold text-slate-50">AI Assistant</h2>
             <ChatInterface
               ref={chatInterfaceRef}
               messages={chatMessages}
