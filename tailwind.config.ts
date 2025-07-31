@@ -61,7 +61,20 @@ export default {
 					'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
-				}
+				},
+				// Beautiful design tokens for better contrast
+				'text-soft': 'hsl(var(--text-soft))',
+				'text-bright': 'hsl(var(--text-bright))',
+				'button-ghost': 'hsl(var(--button-ghost))',
+				'button-ghost-hover': 'hsl(var(--button-ghost-hover))'
+			},
+			backgroundImage: {
+				'gradient-primary': 'var(--gradient-primary)',
+				'gradient-secondary': 'var(--gradient-secondary)'
+			},
+			boxShadow: {
+				'elegant': 'var(--shadow-elegant)',
+				'glow': 'var(--shadow-glow)'
 			},
 			borderRadius: {
 				lg: 'var(--radius)',
